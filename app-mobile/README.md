@@ -3,13 +3,28 @@
 A copy of `../app` adapted for phones. `../app` stays unchanged as the reference version.
 
 What is different from `../app`:
-- Portrait only. The Android app name is "Ground Truth".
+- Portrait only. The Android app name is "Ground Truth" and its application ID is `com.example.ground_truth.mobile`, so it installs next to `../app` instead of replacing it.
 - Agree/disagree: a **Who?** button opens a sheet with where those experts are from, since phones have no hover. The moderator gets the same on tap.
 - Rating: the scope (my country / my region / all) is a row of chips that scrolls sideways.
 - Moderator on a phone: search plus a **Filters** button that opens a sheet with all filters and sorting, with active filters as removable chips. Overview tiles are two per row. Comment filters are chips. Panel filters fold away.
 - Light vibration when picking 1-5. The country search is no longer hidden behind the keyboard.
 
-To try it on a real phone without Android Studio: `flutter run -d web-server --web-hostname 0.0.0.0 --web-port 8080`, then open `http://<this computer's IP>:8080` on a phone on the same Wi-Fi. An installable Android app (APK) needs the Android SDK, which this computer doesn't have.
+### Run on an Android phone (wireless debugging)
+
+Needs the Android SDK (Android Studio or the command-line tools). Pair the phone once via *Developer options → Wireless debugging*, then:
+
+```bash
+cd app-mobile
+flutter pub get
+flutter devices                 # the phone shows up as e.g. "SM A366B (wireless)"
+flutter run -d <device-id>      # copy the id from `flutter devices`
+```
+
+In VS Code you can instead pick the phone in the device selector (status bar) and start **app-mobile (phone)** from *Run and Debug*. The first Android build downloads Gradle and takes a few minutes.
+
+### Run without the Android SDK
+
+`flutter run -d web-server --web-hostname 0.0.0.0 --web-port 8080`, then open `http://<this computer's IP>:8080` on a phone on the same Wi-Fi.
 
 ---
 
@@ -45,7 +60,7 @@ Not done yet: real QR scanning, passwords, real push notifications, translations
 Requires the [Flutter SDK](https://docs.flutter.dev/get-started/install) (3.22 or newer).
 
 ```bash
-cd app
+cd app-mobile
 flutter pub get
 flutter run -d edge        # or -d chrome, or an Android emulator / device
 flutter test
