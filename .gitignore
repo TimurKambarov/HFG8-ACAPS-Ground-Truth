@@ -20,7 +20,8 @@ env/
 
 # IDE and AI tools
 .idea/
-.vscode/
+.vscode/*
+!.vscode/launch.json
 .claude/
 *.swp
 *.swo
