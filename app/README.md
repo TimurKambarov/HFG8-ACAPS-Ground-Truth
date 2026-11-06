@@ -38,6 +38,8 @@ flutter test
 dart run tool/identity_check.dart   # anonymity rules, runs without the Flutter test device
 ```
 
+On an Android phone (USB or wireless debugging), use `flutter devices` to find its id and run `flutter run -d <device-id>`. The phone version in `../app-mobile` uses a different application ID, so both can be installed at the same time. In VS Code, the *Run and Debug* panel has a launch configuration for each app (`.vscode/launch.json`).
+
 On Windows, building for the Windows desktop target needs Developer Mode, because of plugin symlinks. The web target doesn't.
 
 `flutter create .` only generates the missing platform folders. It does not overwrite `lib/`.
