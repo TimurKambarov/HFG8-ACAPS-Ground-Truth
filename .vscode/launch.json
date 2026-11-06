@@ -1,0 +1,40 @@
+{
+  // Run and Debug configurations for the two Flutter apps.
+  // The target device is whatever is selected in the VS Code status bar
+  // (e.g. your phone over wireless debugging, or Edge for the web).
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "app-mobile (phone)",
+      "cwd": "app-mobile",
+      "program": "lib/main.dart",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "debug"
+    },
+    {
+      "name": "app (reference)",
+      "cwd": "app",
+      "program": "lib/main.dart",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "debug"
+    },
+    {
+      "name": "app (Edge)",
+      "cwd": "app",
+      "program": "lib/main.dart",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "edge"
+    },
+    {
+      "name": "app-mobile (Edge)",
+      "cwd": "app-mobile",
+      "program": "lib/main.dart",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "edge"
+    }
+  ]
+}
