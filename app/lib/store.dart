@@ -14,6 +14,21 @@ export 'identity.dart';
 /// Demo invite codes, as printed on the QR codes ACAPS hands out.
 const inviteCodes = {'GT-CHAD-7Q4X': 'Chad', 'GT-SDN-3K9M': 'Sudan'};
 
+/// Invite code for a country panel: the printed demo code if there is one,
+/// otherwise a stable generated one (same country, same code).
+String inviteCodeFor(String country) {
+  final printed = inviteCodes.entries.where((e) => e.value == country).firstOrNull?.key;
+  if (printed != null) return printed;
+  final letters = country.toUpperCase().replaceAll(RegExp('[^A-Z]'), '');
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  var h = 7;
+  for (final u in country.codeUnits) {
+    h = (h * 31 + u) & 0x7fffffff;
+  }
+  final tail = List.generate(4, (i) => alphabet[(h >> (i * 5)) % alphabet.length]).join();
+  return 'GT-${letters.substring(0, min(4, letters.length))}-$tail';
+}
+
 /// Likelihood 1..5 -> probability used for Brier scoring.
 const likelihoodProbs = [0.1, 0.3, 0.5, 0.7, 0.9];
 
@@ -47,6 +62,30 @@ String regionOf(String country) =>
     regions.entries.where((e) => e.value.contains(country)).firstOrNull?.key ?? 'Other';
 
 enum RatingScope { country, region, all }
+
+/// An ACAPS moderator account. Each moderator signs in separately, so their
+/// actions on comments are attributed and their display settings are their
+/// own. All moderators have the same permissions; there are no roles.
+class Moderator {
+  final String id;
+  final String name;
+  const Moderator({required this.id, required this.name});
+
+  /// "Sarah Okafor" -> "Sarah O."
+  String get shortName {
+    final parts = name.split(' ');
+    return parts.length < 2 ? name : '${parts.first} ${parts.last[0]}.';
+  }
+}
+
+/// Synthetic moderator accounts (no real ACAPS staff).
+const moderators = [
+  Moderator(id: 'm1', name: 'Sarah Okafor'),
+  Moderator(id: 'm2', name: 'Tomás Lindqvist'),
+  Moderator(id: 'm3', name: 'Mei Tanaka'),
+];
+
+Moderator? moderatorById(String? id) => moderators.where((m) => m.id == id).firstOrNull;
 
 enum AppTheme { system, light, dark, contrast }
 
@@ -153,8 +192,22 @@ class AppState extends ChangeNotifier {
   final Map<String, Set<String>> _skipped = {}; // expertId -> riskIds
 
   // ---- display settings (persisted separately; Reset demo keeps them) ----
-  AppTheme theme = AppTheme.system;
-  double textScale = 1.0;
+  // Each account (expert or moderator) keeps its own theme and text size.
+  // Accounts that never changed them use the device default, which is also
+  // what the sign-in screens use.
+  final Map<String, ({AppTheme theme, double scale})> _display = {};
+  static const _deviceKey = 'device';
+
+  String get _displayKey => sessionModeratorId ?? sessionExpertId ?? _deviceKey;
+
+  ({AppTheme theme, double scale}) get _currentDisplay =>
+      _display[_displayKey] ?? _display[_deviceKey] ?? (theme: AppTheme.system, scale: 1.0);
+
+  AppTheme get theme => _currentDisplay.theme;
+  double get textScale => _currentDisplay.scale;
+
+  /// Sets the theme for the current account without saving (tests, previews).
+  set theme(AppTheme t) => _display[_displayKey] = (theme: t, scale: textScale);
 
   /// Risk to open straight away, e.g. from a tapped push notification (?risk=R1043).
   String? deepLinkRisk;
@@ -163,28 +216,45 @@ class AppState extends ChangeNotifier {
   final Set<String> autoOpened = {};
 
   void setTheme(AppTheme t) {
-    theme = t;
+    _display[_displayKey] = (theme: t, scale: textScale);
     _saveUi();
     notifyListeners();
   }
 
   void setTextScale(double v) {
-    textScale = snapTextScale(v);
+    _display[_displayKey] = (theme: theme, scale: snapTextScale(v));
     _saveUi();
     notifyListeners();
   }
 
   static const _uiKey = 'ground_truth_ui_v1';
 
-  void _saveUi() => _prefs?.setString(_uiKey, jsonEncode({'theme': theme.name, 'scale': textScale}));
+  void _saveUi() => _prefs?.setString(
+        _uiKey,
+        jsonEncode({
+          'accounts': {
+            for (final e in _display.entries) e.key: {'theme': e.value.theme.name, 'scale': e.value.scale},
+          },
+        }),
+      );
 
   void _restoreUi() {
+    ({AppTheme theme, double scale}) parse(Map m) => (
+          theme: AppTheme.values.firstWhere((t) => t.name == m['theme'], orElse: () => AppTheme.system),
+          scale: snapTextScale((m['scale'] as num?)?.toDouble() ?? 1.0),
+        );
     try {
       final raw = _prefs?.getString(_uiKey);
       if (raw == null) return;
       final m = jsonDecode(raw) as Map<String, dynamic>;
-      theme = AppTheme.values.firstWhere((t) => t.name == m['theme'], orElse: () => AppTheme.system);
-      textScale = snapTextScale((m['scale'] as num?)?.toDouble() ?? 1.0);
+      _display.clear();
+      if (m['accounts'] is Map) {
+        for (final e in (m['accounts'] as Map).entries) {
+          _display[e.key as String] = parse(e.value as Map);
+        }
+      } else {
+        _display[_deviceKey] = parse(m); // older format: one setting for the whole device
+      }
     } catch (_) {}
   }
 
@@ -206,7 +276,12 @@ class AppState extends ChangeNotifier {
   // ---- session (persisted) ----
   String? invitePanel;
   String? sessionExpertId;
-  bool sessionModerator = false;
+  String? sessionModeratorId;
+
+  bool get sessionModerator => sessionModeratorId != null;
+
+  /// The moderator signed in, if any.
+  Moderator? get moderator => moderatorById(sessionModeratorId);
 
   Future<void> load() async {
     try {
@@ -247,7 +322,8 @@ class AppState extends ChangeNotifier {
 
   /// Returns the panel country, or null if the code is not a valid invite.
   String? redeemInvite(String code) {
-    final panel = inviteCodes[code.trim().toUpperCase()];
+    final c = code.trim().toUpperCase();
+    final panel = inviteCodes[c] ?? countries.where((x) => inviteCodeFor(x) == c).firstOrNull;
     if (panel != null) {
       invitePanel = panel;
       _changed();
@@ -257,19 +333,19 @@ class AppState extends ChangeNotifier {
 
   void signInAs(Expert e) {
     sessionExpertId = e.id;
-    sessionModerator = false;
+    sessionModeratorId = null;
     _changed();
   }
 
-  void signInModerator() {
+  void signInModerator([String id = 'm1']) {
     sessionExpertId = null;
-    sessionModerator = true;
+    sessionModeratorId = moderatorById(id)?.id ?? moderators.first.id;
     _changed();
   }
 
   void signOut() {
     sessionExpertId = null;
-    sessionModerator = false;
+    sessionModeratorId = null;
     _changed();
   }
 
@@ -311,7 +387,9 @@ class AppState extends ChangeNotifier {
     await _prefs?.remove(_prefsKey);
     invitePanel = null;
     sessionExpertId = null;
-    sessionModerator = false;
+    sessionModeratorId = null;
+    _bannerDismissed.clear();
+    risks.removeWhere((r) => r.custom);
     _seed();
     _statsCache.clear();
     notifyListeners();
@@ -356,28 +434,48 @@ class AppState extends ChangeNotifier {
       ..sort((a, b) => score(b).compareTo(score(a)));
   }
 
-  /// Resolved risks in my countries I have not answered yet: practice with outcome.
-  List<Risk> practiceForMe() {
+  /// Every closed risk, whenever it closed and whether or not I answered it:
+  /// read-only, to see what happened. My countries come first. New answers
+  /// are not accepted and earn no points; a forecast made while the risk was
+  /// open is still shown with its score.
+  List<Risk> archiveForMe() {
     final e = me;
     if (e == null) return [];
-    return risks
-        .where((r) => r.isResolved && r.probabilityIdx != null && relevantTo(e, r) && responseOf(e, r) == null)
-        .toList();
+    final closed = risks.where((r) => r.isResolved).toList();
+    return [...closed.where((r) => relevantTo(e, r)), ...closed.where((r) => !relevantTo(e, r))];
   }
 
-  /// The "ACAPS updated a risk" notification: first unanswered, unskipped active risk.
+  /// Experts who pressed "Not now" this launch: the banner stays hidden until
+  /// the next launch (deliberately not persisted).
+  final Set<String> _bannerDismissed = {};
+
+  /// The "ACAPS updated a risk" banner: first unanswered, unskipped active risk.
   Risk? get pendingNotification {
     final e = me;
-    if (e == null || !e.notifications) return null;
-    return activeForMe()
-        .where((r) => responseOf(e, r) == null && !(_skipped[e.id]?.contains(r.id) ?? false))
-        .firstOrNull;
+    if (e == null || !e.notifications || _bannerDismissed.contains(e.id)) return null;
+    return activeForMe().where((r) => responseOf(e, r) == null && !isSkipped(r)).firstOrNull;
   }
 
+  bool isSkipped(Risk r) {
+    final e = me;
+    return e != null && (_skipped[e.id]?.contains(r.id) ?? false);
+  }
+
+  /// "Not now": the risk stays in the list, marked skipped, and the banner is
+  /// hidden for the rest of this session.
   void skip(Risk r) {
     final e = me;
     if (e == null) return;
     (_skipped[e.id] ??= {}).add(r.id);
+    _bannerDismissed.add(e.id);
+    _changed();
+  }
+
+  void undoSkip(Risk r) {
+    final e = me;
+    if (e == null) return;
+    _skipped[e.id]?.remove(r.id);
+    _bannerDismissed.remove(e.id);
     _changed();
   }
 
@@ -397,9 +495,10 @@ class AppState extends ChangeNotifier {
     return out;
   }
 
-  void submit(Risk r, Map<String, ItemAnswer> items) {
+  void submit(Risk r, Map<String, ItemAnswer> items, {Credit? credit}) {
     final e = me;
-    if (e == null) return;
+    // Closed risks are read-only: no new or changed forecasts.
+    if (e == null || r.isResolved) return;
     final key = '${e.id}|${r.id}';
     final prev = _responses[key];
     final now = DateTime.now();
@@ -409,6 +508,7 @@ class AppState extends ChangeNotifier {
       items: Map.of(items),
       answeredAt: prev?.answeredAt ?? now,
       editedAt: prev == null ? null : now,
+      credit: credit ?? prev?.credit,
     );
     // "What is ACAPS missing?" answers become comments for the group.
     for (final entry in items.entries) {
@@ -439,6 +539,7 @@ class AppState extends ChangeNotifier {
   /// answers on active risks, so whoever demos them can take the survey.
   Response? _simulated(Expert e, Risk r) {
     if (!e.simulated || !relevantTo(e, r)) return null;
+    if (r.custom) return null; // a brand-new risk has no answers yet
     if (e.persona && r.isActive) return null;
     if (r.id != 'R1043' && Random(stableHash('${e.id}|${r.id}')).nextDouble() > e.participation) return null;
 
@@ -559,21 +660,38 @@ class AppState extends ChangeNotifier {
 
   void toggleUseful(Comment c) {
     c.useful = !c.useful;
-    c.reviewed = true;
+    c.usefulBy = c.useful ? sessionModeratorId : null;
+    _markReviewed(c);
     _changed();
   }
 
   void setUsedIn(Comment c, String? riskId) {
     c.usedInRiskId = riskId;
-    c.reviewed = true;
+    c.usedBy = riskId == null ? null : sessionModeratorId;
+    _markReviewed(c);
     _changed();
   }
 
   void setReviewed(Comment c, bool v) {
     c.reviewed = v;
+    c.reviewedBy = v ? sessionModeratorId : null;
     _changed();
   }
 
+  void _markReviewed(Comment c) {
+    if (!c.reviewed) c.reviewedBy = sessionModeratorId;
+    c.reviewed = true;
+  }
+
+  /// What one moderator has done, for their profile.
+  ({int reviewed, int useful, int used}) activityOf(Moderator m) => (
+        reviewed: comments.where((c) => c.reviewedBy == m.id).length,
+        useful: comments.where((c) => c.usefulBy == m.id).length,
+        used: comments.where((c) => c.usedBy == m.id).length,
+      );
+
+  /// New comments no moderator has handled yet. This is the only number on
+  /// the moderator's Inbox badge.
   int get commentsToReview => comments.where((c) => c.needsReview).length;
 
   /// Moderator view of one risk: response rate, comments, and how far the
@@ -629,6 +747,118 @@ class AppState extends ChangeNotifier {
     return out;
   }
 
+  // =========================================================================
+  // Risks created by the moderator
+  // =========================================================================
+
+  /// Next free id after the highest "R<number>" in use.
+  String nextRiskId() {
+    final n = risks.map((r) => int.tryParse(r.id.replaceAll(RegExp('[^0-9]'), '')) ?? 0).fold(0, max);
+    return 'R${n + 1}';
+  }
+
+  /// Adds a new risk, or replaces the one with the same id.
+  void saveRisk(Risk r) {
+    final i = risks.indexWhere((x) => x.id == r.id);
+    if (i >= 0) {
+      risks[i] = r;
+    } else {
+      risks.add(r);
+    }
+    _changed();
+  }
+
+  /// Only risks created in the app can be deleted; Risk Radar risks stay.
+  void deleteRisk(Risk r) {
+    if (!r.custom) return;
+    risks.removeWhere((x) => x.id == r.id);
+    comments.removeWhere((c) => c.riskId == r.id);
+    _responses.removeWhere((_, v) => v.riskId == r.id);
+    for (final s in _skipped.values) {
+      s.remove(r.id);
+    }
+    _changed();
+  }
+
+  // =========================================================================
+  // Public view: aggregates only, safe to publish
+  // =========================================================================
+
+  /// Contributors who agreed to be named for this risk (their choice in the
+  /// survey, or their profile default), sorted by name.
+  List<({String name, Credit as})> creditsFor(Risk r) => [
+        for (final e in respondents(r))
+          if (publicCredit(e, responseOf(e, r)?.credit) case final c?) c,
+      ]..sort((a, b) => a.name.compareTo(b.name));
+
+  /// What the public may see for one risk: aggregates only, no comments, no
+  /// respondent countries; no results at all below [minPanel] respondents.
+  /// With [credits], experts who agreed are listed as contributors (never
+  /// next to an answer).
+  Map<String, dynamic> publicView(Risk r, {bool credits = false}) {
+    final n = respondents(r).length;
+    List<int> dist(Iterable<int> xs) {
+      final c = List.filled(5, 0);
+      for (final x in xs) {
+        c[x - 1]++;
+      }
+      return c;
+    }
+
+    double? mean(List<int> xs) => xs.isEmpty ? null : double.parse((xs.reduce((a, b) => a + b) / xs.length).toStringAsFixed(2));
+    return {
+      'risk_id': r.id,
+      'title': r.title,
+      'countries': riskCountries(r),
+      'status': r.status,
+      'acaps': {
+        'probability': r.probabilityIdx == null ? null : levelLabels[r.probabilityIdx!],
+        'likelihood_1_5': r.acapsLikelihood,
+        'impact_1_5': r.impact,
+        'risk_level': r.level.isEmpty ? null : r.level,
+      },
+      'respondents': n,
+      'published': n >= minPanel,
+      if (n >= minPanel)
+        'questions': [
+          for (final it in r.surveyItems)
+            () {
+              final a = answersFor(r, it.id);
+              final l = [for (final x in a) x.likelihood], s = [for (final x in a) x.severity];
+              return {
+                'id': it.id,
+                'title': it.title,
+                'answers': a.length,
+                'agreement_with_acaps': {for (final g in Agreement.values) g.name: a.where((x) => x.agree == g).length},
+                'likelihood': {'distribution_1_5': dist(l), 'mean': mean(l)},
+                'severity': {'distribution_1_5': dist(s), 'mean': mean(s)},
+              };
+            }(),
+        ],
+      if (n >= minPanel && credits) ...() {
+        final cs = creditsFor(r);
+        return {
+          'contributors': [
+            for (final c in cs) {'name': c.name, 'credited_as': c.as == Credit.realName ? 'real_name' : 'pseudonym'},
+          ],
+          'anonymous_contributors': n - cs.length,
+        };
+      }(),
+    };
+  }
+
+  /// A file ready to publish: one risk, or every risk with enough respondents.
+  String publicViewJson(Iterable<Risk> rs, {bool credits = false}) => const JsonEncoder.withIndent('  ').convert({
+        'schema': 'acaps-ground-truth/public-view/v1',
+        'generated_at': DateTime.now().toUtc().toIso8601String(),
+        'min_respondents': minPanel,
+        'risks': [for (final r in rs) publicView(r, credits: credits)],
+      });
+
+  /// Risks whose public view would show results.
+  List<Risk> get publishableRisks =>
+      risks.where((r) => (r.isActive || r.isResolved) && respondents(r).length >= minPanel).toList();
+
   /// Raw stored expert records, exactly as persisted (for the demo).
   String get rawExpertTable =>
       const JsonEncoder.withIndent('  ').convert([for (final e in experts) e.toJson()]);
@@ -682,10 +912,10 @@ class AppState extends ChangeNotifier {
           agreeIds: {'e6', 'e7'}, disagreeIds: {'e5', 'e8'}),
       Comment(id: 's3', riskId: 'R1043', itemId: t2, authorId: 'e7',
           text: 'Threats against Amdjarass are mostly rhetoric so far. Attacks on fuel convoys on the Abéché road are the more likely strike.',
-          agreeIds: {'e4', 'e5', 'e6', 'e8'}, useful: true),
+          agreeIds: {'e4', 'e5', 'e6', 'e8'}, useful: true, usefulBy: 'm2', reviewed: true, reviewedBy: 'm2'),
       Comment(id: 's4', riskId: 'R1043', itemId: t3, authorId: 'e5',
           text: 'Recruitment in the Ouaddaï camps is an earlier signal of proxy mobilisation than armed incursions.',
-          agreeIds: {'e4', 'e6', 'e7'}, disagreeIds: {'e8'}, usedInRiskId: 'R1048'),
+          agreeIds: {'e4', 'e6', 'e7'}, disagreeIds: {'e8'}, usedInRiskId: 'R1048', usedBy: 'm1', reviewed: true, reviewedBy: 'm1'),
       // A few more, so the moderator filters have something to show.
       Comment(id: 's6', riskId: 'R1048', itemId: byId('R1048')?.surveyItems.first.id ?? 'risk', authorId: 'e9',
           text: 'RSF supply lines into Blue Nile run through Ethiopian border markets. Watch Kurmuk.',
@@ -698,11 +928,12 @@ class AppState extends ChangeNotifier {
           agreeIds: {'e9'}, disagreeIds: {'e7'}),
       Comment(id: 's9', riskId: 'R1043', itemId: 'R1043 - T0620', authorId: 'e8',
           text: 'I see little sign of proxy mobilisation yet; this trigger looks overrated.',
-          agreeIds: {}, disagreeIds: {'e4', 'e5', 'e6'}, reviewed: true),
-      // Persona history: shows moderator feedback under Profile -> My answers.
+          agreeIds: {}, disagreeIds: {'e4', 'e5', 'e6'}, reviewed: true, reviewedBy: 'm3'),
+      // Persona history: shows moderator feedback under Profile -> My forecasts.
       Comment(id: 's5', riskId: 'R0002', itemId: byId('R0002')?.surveyItems.first.id ?? 'risk', authorId: 'p1',
           text: 'Fighting is pushing traders off the El Geneina - Adre route; watch fuel prices in Adre market.',
-          agreeIds: {'e4', 'e6', 'e7', 'e9'}, disagreeIds: {'e11'}, useful: true, usedInRiskId: 'R1043'),
+          agreeIds: {'e4', 'e6', 'e7', 'e9'}, disagreeIds: {'e11'}, useful: true, usefulBy: 'm1', usedInRiskId: 'R1043', usedBy: 'm1',
+          reviewed: true, reviewedBy: 'm1'),
     ];
   }
 
@@ -725,10 +956,11 @@ class AppState extends ChangeNotifier {
         'experts': [for (final e in experts) e.toJson()],
         'responses': [for (final r in _responses.values) r.toJson()],
         'comments': [for (final c in comments) c.toJson()],
+        'custom_risks': [for (final r in risks.where((r) => r.custom)) r.toJson()],
         'skipped': {for (final e in _skipped.entries) e.key: e.value.toList()},
         'invite': invitePanel,
         'session': sessionExpertId,
-        'moderator': sessionModerator,
+        'moderator': sessionModeratorId,
       }),
     );
   }
@@ -742,6 +974,8 @@ class AppState extends ChangeNotifier {
       _responses.clear();
       for (final r in m['responses'] as List) {
         final resp = Response.fromJson((r as Map).cast<String, dynamic>());
+        // Old "practice" answers on closed risks: no longer allowed, never scored.
+        if (byId(resp.riskId)?.isResolved ?? false) continue;
         _responses['${resp.expertId}|${resp.riskId}'] = resp;
       }
       comments = [for (final c in m['comments'] as List) Comment.fromJson((c as Map).cast<String, dynamic>())];
@@ -753,7 +987,11 @@ class AppState extends ChangeNotifier {
         });
       invitePanel = m['invite'] as String?;
       sessionExpertId = m['session'] as String?;
-      sessionModerator = m['moderator'] == true;
+      final mod = m['moderator'];
+      sessionModeratorId = mod == true ? moderators.first.id : moderatorById(mod is String ? mod : null)?.id;
+      risks
+        ..removeWhere((r) => r.custom)
+        ..addAll([for (final r in (m['custom_risks'] as List? ?? const [])) Risk.fromJson((r as Map).cast<String, dynamic>())]);
       return true;
     } catch (_) {
       return false; // corrupt or old state: start fresh

@@ -11,7 +11,11 @@ void main() {
   // A tapped push notification opens the app with ?risk=<id> (web) or the
   // same value from the notification payload (mobile).
   appState.deepLinkRisk = Uri.base.queryParameters['risk'];
-  appState.load();
+  // A scanned invite QR code opens the app with ?invite=<code>.
+  final invite = Uri.base.queryParameters['invite'];
+  appState.load().then((_) {
+    if (invite != null && !appState.signedIn) appState.redeemInvite(invite);
+  });
   runApp(const GroundTruthApp());
 }
 
@@ -57,7 +61,7 @@ class GroundTruthApp extends StatelessWidget {
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 300),
       child: appState.sessionModerator
-          ? const ModeratorShell(key: ValueKey('moderator'))
+          ? ModeratorShell(key: ValueKey('moderator-${appState.sessionModeratorId}'))
           : appState.me != null
               ? HomeShell(key: ValueKey('home-${appState.me!.id}'))
               : appState.invitePanel == null
