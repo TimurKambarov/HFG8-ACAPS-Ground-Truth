@@ -494,7 +494,7 @@ extension CreditText on Credit {
       };
 }
 
-/// A single-use invite link: one per person, works once. Trust is checked
+/// A single-use invite code: one per person, works once. Trust is checked
 /// at the door (ACAPS knows whom it invited); inside, the expert chooses
 /// their anonymity. So an invite records THAT it was used, never by which
 /// account: otherwise a fully anonymous expert could be traced through it.
@@ -507,6 +507,9 @@ class Invite {
 
   /// Moderator who created it.
   final String createdBy;
+
+  /// Their name, for codes listed from the server (real moderator accounts).
+  final String? createdByName;
   final DateTime createdAt;
 
   /// Who it is for, so moderators can follow up. Moderators only.
@@ -518,6 +521,7 @@ class Invite {
     required this.code,
     this.country,
     required this.createdBy,
+    this.createdByName,
     required this.createdAt,
     this.note = '',
     this.usedAt,
@@ -548,10 +552,10 @@ class Invite {
       );
 }
 
-/// Result of opening an invite link.
-enum InviteStatus { ok, unknown, used, revoked }
+/// Result of checking a typed invite or referral code.
+enum InviteStatus { ok, unknown, used, revoked, expired }
 
-/// Someone joined through an expert's referral link. The joined account is
+/// Someone joined with an expert's referral code. The joined account is
 /// kept so the inviter can follow the colleague's progress (how many risks
 /// answered) and, in the pilot, earn points after 3 answered risks. The
 /// inviter only ever sees the stage: never the name, pseudonym, answers or

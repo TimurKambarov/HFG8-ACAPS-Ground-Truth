@@ -46,5 +46,5 @@ yarn.lock
 *.key
 *.pem
 
-# Scripts with the ACAPS API login written in them: keep them local only.
-supabase/migrations/acapsAPI.py
+# Supabase backend (migrations, scripts): kept out of the repo
+/supabase/

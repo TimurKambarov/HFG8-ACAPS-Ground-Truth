@@ -201,11 +201,11 @@ class _ProfileTabState extends State<ProfileTab> {
             const SectionLabel('Display'),
             const DisplaySettings(),
 
-            const SectionLabel('Demo'),
+            SectionLabel(appState.sessionAccountId != null ? 'Account' : 'Demo'),
             OutlinedButton.icon(
               onPressed: appState.signOut,
-              icon: const Icon(Icons.switch_account_outlined),
-              label: const Text('Switch user'),
+              icon: Icon(appState.sessionAccountId != null ? Icons.logout : Icons.switch_account_outlined),
+              label: Text(appState.sessionAccountId != null ? 'Log out' : 'Switch user'),
             ),
             const SizedBox(height: 8),
             if (!_confirmReset)
@@ -248,15 +248,19 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 }
 
-/// The expert's own permanent referral link: colleagues they trust can join
-/// the closed group with it. One link per expert, any number of colleagues.
+/// The expert's own permanent referral code: colleagues they trust can join
+/// the closed group with it. One code per expert, any number of colleagues.
+/// There is no installed app yet, so the colleague types the code on the
+/// start screen ("I have a code"); there is no link to open.
 class _ReferralCard extends StatelessWidget {
   final Expert me;
   const _ReferralCard({required this.me});
 
-  static String _message(String link) =>
+  static String _message(String code) =>
       'I am part of the ACAPS Ground Truth expert group: a few minutes a month to ground-truth ACAPS '
-      'humanitarian risk analysis, at the level of anonymity you choose. You can join with my link: $link';
+      'humanitarian risk analysis, at the level of anonymity you choose.\n\n'
+      'Join Ground Truth with my code: $code\n'
+      'Open the app, tap "I have a code" and type it in.';
 
   void _copy(BuildContext context, String text, String what) {
     Clipboard.setData(ClipboardData(text: text));
@@ -267,9 +271,10 @@ class _ReferralCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    final link = inviteLink(me.referralCode);
+    final code = me.referralCode;
     final n = appState.referralsBy(me);
     final progress = appState.referralProgress(me);
+    final syncError = appState.sessionAccountId == null ? null : appState.accountSyncError;
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -277,9 +282,9 @@ class _ReferralCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Your referral link', style: t.titleSmall),
+            Text('Your referral code', style: t.titleSmall),
             const SizedBox(height: 4),
-            Text('Send it to experts you trust: they can join the group with it. '
+            Text('Share it with experts you trust: they type it in the app to join the group. '
                 'It is permanent and works for any number of colleagues.', style: t.bodySmall),
             const SizedBox(height: 12),
             Container(
@@ -287,23 +292,28 @@ class _ReferralCard extends StatelessWidget {
               decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
               child: Row(
                 children: [
-                  Icon(Icons.link, color: cs.primary),
+                  Icon(Icons.vpn_key_outlined, color: cs.primary),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: SelectableText(link, style: const TextStyle(fontFamily: 'monospace', fontSize: 13, fontWeight: FontWeight.w700)),
+                    child: code.isEmpty
+                        ? Text(syncError ?? 'Loading your code…', style: t.bodySmall?.copyWith(color: syncError == null ? null : cs.error))
+                        : SelectableText(code,
+                            style: const TextStyle(fontFamily: 'monospace', fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
                   ),
+                  if (code.isEmpty && syncError != null)
+                    IconButton(tooltip: 'Try again', onPressed: appState.refreshAccount, icon: const Icon(Icons.refresh)),
                 ],
               ),
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
-              onPressed: () => _copy(context, link, 'Referral link'),
+              onPressed: code.isEmpty ? null : () => _copy(context, code, 'Referral code'),
               icon: const Icon(Icons.copy, size: 18),
-              label: const Text('Copy link'),
+              label: const Text('Copy code'),
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
-              onPressed: () => _copy(context, _message(link), 'Invitation message'),
+              onPressed: code.isEmpty ? null : () => _copy(context, _message(code), 'Invitation message'),
               icon: const Icon(Icons.mail_outline, size: 18),
               label: const Text('Copy invitation message'),
             ),
@@ -315,15 +325,22 @@ class _ReferralCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     n == 0
-                        ? 'Nobody has joined through your link yet.'
-                        : '$n ${n == 1 ? 'colleague' : 'colleagues'} joined through your link · +${n * Points.referral} points',
+                        ? 'Nobody has joined with your code yet.'
+                        : '$n ${n == 1 ? 'colleague' : 'colleagues'} joined with your code · +${n * Points.referral} points',
                     style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
                   ),
                 ),
               ],
             ),
             // Each colleague's progress: stage only, never who they are.
-            for (var i = 0; i < progress.length; i++) _ReferralRow(number: i + 1, answered: progress[i].answered, stage: progress[i].stage),
+            for (var i = 0; i < progress.length; i++)
+              _ReferralRow(
+                number: i + 1,
+                answered: progress[i].answered,
+                stage: progress[i].stage,
+                joinedAt: progress[i].joinedAt,
+                tracked: progress[i].tracked,
+              ),
             const SizedBox(height: 12),
             // Toward the Referral Master badge (shown in the Rating).
             Row(
@@ -342,10 +359,9 @@ class _ReferralCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            InfoBanner(
+            const InfoBanner(
               icon: Icons.info_outline,
-              text: 'Demo: you get +${Points.referral} points as soon as a colleague registers with your link. '
-                  'In the real pilot: only once they have answered at least ${Points.referralAnswersInPilot} risks.',
+              text: 'You get +${Points.referral} points as soon as a colleague signs up with your code.',
             ),
             const SizedBox(height: 8),
             Text('Anonymity: you only see how far each colleague has got (how many risks they answered), '
@@ -360,11 +376,15 @@ class _ReferralCard extends StatelessWidget {
 
 /// "Colleague 1  ●──●──○  Answered 1 of 3 risks": one referred colleague's
 /// progress through the three stages, without anything that identifies them.
+/// For real accounts only the join date is known ([tracked] false): answers
+/// are not in the shared database yet.
 class _ReferralRow extends StatelessWidget {
   final int number;
   final int answered;
   final ReferralStage stage;
-  const _ReferralRow({required this.number, required this.answered, required this.stage});
+  final DateTime joinedAt;
+  final bool tracked;
+  const _ReferralRow({required this.number, required this.answered, required this.stage, required this.joinedAt, this.tracked = true});
 
   @override
   Widget build(BuildContext context) {
@@ -372,11 +392,13 @@ class _ReferralRow extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     const goal = Points.referralAnswersInPilot;
     final done = stage.index; // 0 joined, 1 first risk, 2 three risks
-    final label = switch (stage) {
-      ReferralStage.joined => 'Joined · no risks answered yet',
-      ReferralStage.firstRisk => 'Answered $answered of $goal risks',
-      ReferralStage.threeRisks => '$goal+ risks answered: fully active',
-    };
+    final label = !tracked
+        ? 'Joined ${formatDate(joinedAt)}'
+        : switch (stage) {
+            ReferralStage.joined => 'Joined · no risks answered yet',
+            ReferralStage.firstRisk => 'Answered $answered of $goal risks',
+            ReferralStage.threeRisks => '$goal+ risks answered: fully active',
+          };
     Widget dot(bool on) => Container(
           width: 12,
           height: 12,
