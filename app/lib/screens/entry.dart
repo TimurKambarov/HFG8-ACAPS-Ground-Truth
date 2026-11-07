@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../design.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
@@ -43,66 +44,215 @@ class _InviteScreenState extends State<InviteScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    return Scaffold(
-      body: ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          const _Hero(subtitle: 'A trusted, closed network of humanitarian experts. A few minutes a week to ground-truth ACAPS risk analysis.'),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+    // The cover is always night, whatever the theme: the first impression.
+    final contrast = appState.theme == AppTheme.contrast;
+    return Theme(
+      data: contrast ? buildContrastTheme() : buildTheme(Brightness.dark),
+      child: Builder(builder: (context) {
+        final t = Theme.of(context).textTheme;
+        final cs = Theme.of(context).colorScheme;
+        return Scaffold(
+          body: SafeArea(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
               children: [
-                Center(
-                  child: Container(
-                    width: 150,
-                    height: 150,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Theme.of(context).colorScheme.primary, width: 3),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Icon(Icons.link, size: 110, color: Theme.of(context).colorScheme.primary),
-                  ),
+                const _TopBar(),
+                const SizedBox(height: 8),
+                const _Constellation(height: 200),
+                const SizedBox(height: 18),
+                Text('Ground\nTruth', style: t.displaySmall?.copyWith(fontSize: 56, height: 0.95, letterSpacing: -2)),
+                const SizedBox(height: 14),
+                Text(
+                  'A trusted, closed network of humanitarian experts. A few minutes a week to ground-truth ACAPS risk analysis.',
+                  style: t.bodyLarge?.copyWith(color: cs.onSurfaceVariant),
                 ),
-                const SizedBox(height: 16),
-                Text('Join with the invite link you received from ACAPS', textAlign: TextAlign.center, style: t.titleMedium),
+                const SizedBox(height: 22),
+                const _Facts(),
+                const SizedBox(height: 26),
+                Text('Join with the invite link you received from ACAPS', style: t.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
                 const SizedBox(height: 6),
                 Text('Your link is your way in: it is personal and works once. '
                     'In the demo, Register uses one of the demo invite links.',
-                    textAlign: TextAlign.center, style: t.bodySmall),
+                    style: t.bodySmall),
                 const SizedBox(height: 16),
-                FilledButton.icon(
+                FilledButton(
                   onPressed: _openDemoLink,
-                  icon: const Icon(Icons.person_add_alt),
-                  label: const Text('Register'),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [Text('Register'), SizedBox(width: 10), Icon(Icons.arrow_forward, size: 20)],
+                  ),
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: 10),
-                  InfoBanner(icon: Icons.link_off, color: Theme.of(context).colorScheme.error, text: _error!),
+                  InfoBanner(icon: Icons.link_off, color: cs.error, text: _error!),
                 ],
-                const SizedBox(height: 24),
-                Row(
-                  children: [
-                    const Expanded(child: Divider()),
-                    Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: Text('Already a member?', style: t.bodySmall)),
-                    const Expanded(child: Divider()),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                const SizedBox(height: 10),
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(56)),
                   onPressed: appState.openLogin,
-                  icon: const Icon(Icons.login),
-                  label: const Text('Log in'),
+                  child: const Text('Log in'),
                 ),
+                const SizedBox(height: 10),
+                Text('Already a member? Log in with your pseudonym.', textAlign: TextAlign.center, style: t.bodySmall),
               ],
             ),
           ),
-        ],
+        );
+      }),
+    );
+  }
+}
+
+/// "GROUND TRUTH · ACAPS" and the display settings.
+class _TopBar extends StatelessWidget {
+  const _TopBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        const AcapsMark(size: 12),
+        const SizedBox(width: 8),
+        Expanded(child: Text('GROUND TRUTH · FOR ACAPS', style: mono(11.5, weight: FontWeight.w700, color: cs.onSurface, spacing: 1.6))),
+        IconButton(
+          tooltip: 'Theme and text size',
+          onPressed: () => showDisplaySettings(context),
+          icon: Icon(Icons.text_fields, color: cs.onSurface),
+        ),
+      ],
+    );
+  }
+}
+
+/// Three promises as numbers.
+class _Facts extends StatelessWidget {
+  const _Facts();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    Widget fact(String big, String small) => Expanded(
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(10, 10, 6, 10),
+            decoration: BoxDecoration(border: Border(left: BorderSide(color: cs.onSurface, width: 2))),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(big, style: mono(24, weight: FontWeight.w700, color: cs.onSurface, spacing: -0.5)),
+                const SizedBox(height: 2),
+                Text(small, style: TextStyle(fontSize: 12, height: 1.25, color: cs.onSurfaceVariant)),
+              ],
+            ),
+          ),
+        );
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        fact('5–10', 'experts per country, invited'),
+        fact('2 min', 'per risk, about once a week'),
+        fact('0', 'names in anything made public'),
+      ],
+    );
+  }
+}
+
+/// A field of anonymous experts as dots. One is you (blue, with a halo);
+/// the ink square is ACAPS. The dots come on one by one.
+class _Constellation extends StatefulWidget {
+  final double height;
+  const _Constellation({required this.height});
+
+  @override
+  State<_Constellation> createState() => _ConstellationState();
+}
+
+class _ConstellationState extends State<_Constellation> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600));
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+      _c.value = 1;
+    } else if (_c.value == 0 && !_c.isAnimating) {
+      _c.forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: widget.height,
+      width: double.infinity,
+      child: AnimatedBuilder(
+        animation: _c,
+        builder: (context, _) => CustomPaint(
+          painter: _ConstellationPainter(t: _c.value, dot: cs.onSurfaceVariant, ink: cs.onSurface, you: youColor(context)),
+        ),
       ),
     );
   }
+}
+
+class _ConstellationPainter extends CustomPainter {
+  final double t;
+  final Color dot, ink, you;
+  _ConstellationPainter({required this.t, required this.dot, required this.ink, required this.you});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const cols = 13, rows = 7;
+    final dx = size.width / cols, dy = size.height / rows;
+    // Deterministic "panels": clusters of brighter dots around a few centres.
+    final centres = [const Offset(2.5, 2), const Offset(6, 4.5), const Offset(10, 2.2)];
+    var k = 0;
+    Offset? youAt;
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        k++;
+        final at = Offset(dx * (c + 0.5), dy * (r + 0.5));
+        final near = centres.any((p) => (Offset(c.toDouble(), r.toDouble()) - p).distance < 1.6);
+        final appear = ((t * 1.4) - (k / (rows * cols))).clamp(0.0, 1.0);
+        if (appear <= 0) continue;
+        if (r == 4 && c == 6) {
+          youAt = at;
+          continue;
+        }
+        if (r == 2 && c == 10) {
+          final s = 9.0 * appear;
+          canvas.drawRect(Rect.fromCenter(center: at, width: s, height: s), Paint()..color = ink);
+          continue;
+        }
+        canvas.drawCircle(at, (near ? 4.2 : 2.2) * appear, Paint()..color = near ? dot : dot.withAlpha(90));
+      }
+    }
+    if (youAt != null && t > 0.55) {
+      final a = ((t - 0.55) / 0.45).clamp(0.0, 1.0);
+      // Ripples around you: your view reaches the group, your name does not.
+      for (final (r, alpha) in const [(34.0, 50), (24.0, 90)]) {
+        canvas.drawCircle(
+            youAt,
+            r * a,
+            Paint()
+              ..color = you.withAlpha((alpha * a).round())
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.5);
+      }
+      canvas.drawCircle(youAt, 14 * a, Paint()..color = you.withAlpha(60));
+      canvas.drawCircle(youAt, 7 * a, Paint()..color = you);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ConstellationPainter old) => old.t != t || old.you != you || old.dot != dot;
 }
 
 /// Log in as an existing member (for the MVP: pick a synthetic demo user or
@@ -152,7 +302,7 @@ class SignInScreen extends StatelessWidget {
                     child: Card(
                       child: ListTile(
                         leading: Avatar(nameSeenBy(e, ViewerRole.expert)),
-                        title: Text(e.pseudonym, style: const TextStyle(fontWeight: FontWeight.w700)),
+                        title: Text(e.pseudonym, style: const TextStyle(fontWeight: FontWeight.w800)),
                         subtitle: Text('Level ${e.level.number}: ${e.level.label} · ${e.homeCountry}'),
                         trailing: const Icon(Icons.chevron_right),
                         onTap: () => appState.signInAs(e),
@@ -167,11 +317,13 @@ class SignInScreen extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(vertical: 5),
                     child: Card(
                       child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: cs.tertiary.withAlpha(50),
-                          child: Icon(Icons.admin_panel_settings_outlined, color: cs.onSurface),
+                        leading: Container(
+                          width: 36,
+                          height: 36,
+                          color: cs.onSurface,
+                          child: Icon(Icons.admin_panel_settings_outlined, color: cs.surface, size: 20),
                         ),
-                        title: Text(m.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                        title: Text(m.name, style: const TextStyle(fontWeight: FontWeight.w800)),
                         subtitle: const Text('ACAPS moderator'),
                         trailing: const Icon(Icons.chevron_right),
                         onTap: () => appState.signInModerator(m.id),
@@ -305,8 +457,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
             title: const Text('Take part in the rating'),
             subtitle: const Text('You appear under the name your level allows.'),
           ),
-          const SizedBox(height: 20),
-          FilledButton(
+        ],
+      ),
+      // Always in reach, at the bottom of the screen.
+      bottomNavigationBar: SafeArea(
+        child: Container(
+          decoration: BoxDecoration(border: Border(top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant))),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          child: FilledButton(
             onPressed: _valid
                 ? () {
                     appState.register(
@@ -322,46 +480,46 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     Navigator.of(context).popUntil((r) => r.isFirst);
                   }
                 : null,
-            child: const Text('Join the group'),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [Text('Join the group'), SizedBox(width: 10), Icon(Icons.arrow_forward, size: 20)],
+            ),
           ),
-        ],
+        ),
       ),
     );
   }
 }
 
+/// Compact night band for the log-in screen: same marks as the cover.
 class _Hero extends StatelessWidget {
   final String subtitle;
   const _Hero({required this.subtitle});
 
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    return Container(
-      padding: EdgeInsets.fromLTRB(24, MediaQuery.paddingOf(context).top + 36, 24, 28),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [AppColors.primary, AppColors.ink]),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    final contrast = appState.theme == AppTheme.contrast;
+    return Theme(
+      data: contrast ? buildContrastTheme() : buildTheme(Brightness.dark),
+      child: Builder(builder: (context) {
+        final t = Theme.of(context).textTheme;
+        final cs = Theme.of(context).colorScheme;
+        return Container(
+          color: cs.surface,
+          padding: EdgeInsets.fromLTRB(20, MediaQuery.paddingOf(context).top + 8, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.radar, color: Colors.white, size: 34),
-              const Spacer(),
-              IconButton(
-                tooltip: 'Theme and text size',
-                onPressed: () => showDisplaySettings(context),
-                icon: const Icon(Icons.text_fields, color: Colors.white),
-              ),
+              const _TopBar(),
+              const _Constellation(height: 90),
+              const SizedBox(height: 8),
+              Text('Ground Truth', style: t.headlineMedium),
+              const SizedBox(height: 4),
+              Text(subtitle.toUpperCase(), style: mono(12, weight: FontWeight.w700, color: cs.onSurfaceVariant, spacing: 1.4)),
             ],
           ),
-          const SizedBox(height: 16),
-          Text('Ground Truth', style: t.headlineMedium?.copyWith(color: Colors.white)),
-          const SizedBox(height: 8),
-          Text(subtitle, style: t.bodyLarge?.copyWith(color: Colors.white.withAlpha(220), height: 1.4)),
-        ],
-      ),
+        );
+      }),
     );
   }
 }

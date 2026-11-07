@@ -1,33 +1,27 @@
 import 'package:flutter/material.dart';
 
+import 'design.dart';
 import 'models.dart';
 import 'screens/survey.dart';
 import 'store.dart';
 import 'theme.dart';
 
-/// Small uppercase section label.
+/// Section label: a short ink rule and the title in mono capitals.
 class SectionLabel extends StatelessWidget {
   final String text;
   final EdgeInsets padding;
-  const SectionLabel(this.text, {super.key, this.padding = const EdgeInsets.only(top: 24, bottom: 10)});
+  const SectionLabel(this.text, {super.key, this.padding = const EdgeInsets.only(top: 28, bottom: 12)});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: padding,
-      child: Text(
-        text.toUpperCase(),
-        style: TextStyle(
-          fontSize: 11.5,
-          fontWeight: FontWeight.w800,
-          letterSpacing: 1.1,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      ),
+      child: Eyebrow(text.toUpperCase()),
     );
   }
 }
 
+/// ACAPS risk level as a square tag in its heat colour.
 class LevelBadge extends StatelessWidget {
   final String level;
   const LevelBadge(this.level, {super.key});
@@ -35,27 +29,19 @@ class LevelBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = levelColor(level);
+    final fg = level == 'High' ? Colors.white : AppColors.ink;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-      decoration: BoxDecoration(
-        color: c.withAlpha(28),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(width: 7, height: 7, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
-          const SizedBox(width: 6),
-          Text(
-            level.isEmpty ? 'Unrated' : '$level risk',
-            style: TextStyle(color: c, fontWeight: FontWeight.w700, fontSize: 12),
-          ),
-        ],
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      color: c,
+      child: Text(
+        level.isEmpty ? 'UNRATED' : '${level.toUpperCase()} RISK',
+        style: mono(11, weight: FontWeight.w700, color: fg, spacing: 0.9),
       ),
     );
   }
 }
 
+/// Small square tag. [strong] = solid ink.
 class Pill extends StatelessWidget {
   final String text;
   final bool strong;
@@ -65,26 +51,27 @@ class Pill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final fg = strong ? cs.onPrimary : cs.onSurfaceVariant;
+    final fg = strong ? cs.surface : cs.onSurface;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
-        color: strong ? cs.primary : cs.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(20),
+        color: strong ? cs.onSurface : Colors.transparent,
+        border: Border.all(color: cs.onSurface, width: 1.5),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[Icon(icon, size: 13, color: fg), const SizedBox(width: 4)],
-          // Wraps instead of overflowing when the pill is wider than its space.
-          Flexible(child: Text(text, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: fg))),
+          // Wraps instead of overflowing when the tag is wider than its space.
+          Flexible(child: Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: fg, height: 1.2))),
         ],
       ),
     );
   }
 }
 
-/// Initials avatar with a colour derived from the name; anonymous gets a mask.
+/// A person is a dot. Named people get their initials in mono; anonymous
+/// people are a plain grey dot. [ring] marks you (blue).
 class Avatar extends StatelessWidget {
   final String name;
   final double size;
@@ -97,45 +84,37 @@ class Avatar extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final anon = name == anonymousName || name.contains('anonymous');
-    final hue = (stableHash(name) % 360).toDouble();
-    final color = anon
-        ? cs.onSurfaceVariant
-        : HSLColor.fromAHSL(1, hue, 0.38, 0.45).toColor();
     final initials = name
         .split(RegExp(r'[\s\-_]+'))
         .where((p) => p.isNotEmpty && !RegExp(r'^\d+$').hasMatch(p))
         .take(2)
         .map((p) => p[0].toUpperCase())
         .join();
+    final you = youColor(context);
+    final bg = ring ? you : (anon ? cs.onSurfaceVariant : cs.onSurface);
 
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: faded ? Colors.transparent : color.withAlpha(anon ? 50 : 230),
-        border: Border.all(
-          color: ring ? cs.primary : (faded ? cs.outlineVariant : Colors.transparent),
-          width: ring ? 2.5 : 1.5,
-        ),
+        color: faded ? Colors.transparent : bg,
+        border: faded ? Border.all(color: cs.outlineVariant, width: 1.5) : null,
+        boxShadow: ring ? [BoxShadow(color: you.withAlpha(80), spreadRadius: size * 0.12)] : null,
       ),
       alignment: Alignment.center,
       child: anon
-          ? Icon(Icons.visibility_off_outlined,
-              size: size * 0.48, color: faded ? cs.outlineVariant : cs.onSurface)
+          ? null
           : Text(
               initials.isEmpty ? '?' : initials,
-              style: TextStyle(
-                color: faded ? cs.outlineVariant : Colors.white,
-                fontWeight: FontWeight.w800,
-                fontSize: size * 0.36,
-              ),
+              style: mono(size * 0.36, weight: FontWeight.w700, color: faded ? cs.outlineVariant : cs.surface, spacing: 0),
             ),
     );
   }
 }
 
-/// Selectable option card (used for anonymity levels).
+/// Selectable option (used for anonymity levels): a big mono number, the
+/// title and what it means. Selected = ink frame and a filled square.
 class OptionTile extends StatelessWidget {
   final String title;
   final String subtitle;
@@ -155,37 +134,46 @@ class OptionTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final number = RegExp(r'Level (\d)').firstMatch(title)?.group(1);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Material(
-        color: selected ? cs.primary.withAlpha(22) : cs.surfaceContainerLowest,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(color: selected ? cs.primary : cs.outlineVariant, width: selected ? 2 : 1),
-        ),
+        color: selected ? cs.surfaceContainerLowest : Colors.transparent,
+        shape: RoundedRectangleBorder(side: BorderSide(color: selected ? cs.onSurface : cs.outlineVariant, width: selected ? 2.5 : 1.5)),
         child: InkWell(
-          borderRadius: BorderRadius.circular(14),
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(icon, color: selected ? cs.primary : cs.onSurfaceVariant),
-                const SizedBox(width: 14),
+                SizedBox(
+                  width: 34,
+                  child: number != null
+                      ? Text('0$number', style: mono(20, weight: FontWeight.w700, color: selected ? cs.onSurface : cs.onSurfaceVariant))
+                      : Icon(icon, color: selected ? cs.onSurface : cs.onSurfaceVariant),
+                ),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 2),
-                      Text(subtitle, style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
+                      Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15.5, color: cs.onSurface)),
+                      const SizedBox(height: 3),
+                      Text(subtitle, style: TextStyle(fontSize: 13.5, height: 1.35, color: cs.onSurfaceVariant)),
                     ],
                   ),
                 ),
-                AnimatedOpacity(
-                  opacity: selected ? 1 : 0,
-                  duration: const Duration(milliseconds: 150),
-                  child: Icon(Icons.check_circle, color: cs.primary),
+                const SizedBox(width: 8),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color: selected ? cs.onSurface : Colors.transparent,
+                    border: Border.all(color: selected ? cs.onSurface : cs.outlineVariant, width: 2),
+                  ),
+                  child: selected ? Icon(Icons.check, size: 14, color: cs.surface) : null,
                 ),
               ],
             ),
@@ -202,7 +190,8 @@ IconData anonymityIcon(Anonymity a) => switch (a) {
       Anonymity.anonymous => Icons.visibility_off_outlined,
     };
 
-/// A risk in a list: tap to open its survey.
+/// A risk in a list, styled as a dossier tab: the countries as big ISO
+/// codes, the one-liner, ACAPS's probability as heat, and the panel as dots.
 class RiskTile extends StatelessWidget {
   final Risk risk;
   final String? trailing;
@@ -212,14 +201,17 @@ class RiskTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
     final me = appState.me;
     final done = me != null && appState.responseOf(me, risk) != null;
     final skipped = !done && risk.isActive && appState.isSkipped(risk);
-    final stripe = risk.isResolved ? cs.tertiary : levelColor(risk.level);
-    final n = risk.surveyItems.length;
+    final p = risk.probabilityIdx;
+    final stripe = risk.isResolved ? cs.onSurfaceVariant : (p == null ? cs.outlineVariant : scaleColors[p]);
+    final panel = appState.panelForRisk(risk).length;
+    final answered = appState.respondents(risk).length;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Card(
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -230,53 +222,52 @@ class RiskTile extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Container(width: 5, color: stripe),
+                Container(width: 8, color: stripe),
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.all(14),
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            Expanded(
-                              child: Text(
-                                '${risk.id}  ·  ${risk.country.toUpperCase()}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  letterSpacing: 0.8,
-                                  fontWeight: FontWeight.w700,
-                                  color: cs.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                            if (risk.isResolved) const Pill('Closed', icon: Icons.history_edu),
-                            if (skipped) const Pill('Skipped', icon: Icons.snooze_outlined),
+                            Expanded(child: IsoCode(risk, size: 20)),
+                            if (risk.isResolved) ...[const Pill('Closed', icon: Icons.history_edu), const SizedBox(width: 6)],
+                            if (skipped) ...[const Pill('Skipped', icon: Icons.snooze_outlined), const SizedBox(width: 6)],
+                            Text(risk.id, style: mono(12, weight: FontWeight.w700, color: cs.onSurfaceVariant)),
                           ],
                         ),
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 8),
                         Text(
                           risk.oneLiner,
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, height: 1.3),
+                          style: t.titleMedium?.copyWith(fontWeight: FontWeight.w800, height: 1.25),
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 12),
                         Row(
                           children: [
-                            LevelBadge(risk.level),
+                            HeatChip(p == null ? null : p + 1, showRange: false),
+                            const SizedBox(width: 10),
+                            if (panel > 0) Flexible(child: PanelDots(total: panel, answered: answered, youAnswered: done, size: 8)),
                             const SizedBox(width: 10),
                             // Shrinks and wraps on narrow phones instead of overflowing.
                             Expanded(
                               child: Align(
                                 alignment: Alignment.centerRight,
                                 child: done && !risk.isResolved
-                                    ? Icon(Icons.check_circle, color: cs.primary, size: 22)
-                                    : Text(trailing ?? '${n + 1} short screens · 2 min',
+                                    ? Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.check, color: youColor(context), size: 18),
+                                          const SizedBox(width: 3),
+                                          Text('ANSWERED', style: mono(11, weight: FontWeight.w700, color: youColor(context), spacing: 1)),
+                                        ],
+                                      )
+                                    : Text(trailing ?? '2 min',
                                         textAlign: TextAlign.end,
-                                        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                                        style: mono(11.5, color: cs.onSurfaceVariant, spacing: 0.2)),
                               ),
                             ),
                           ],
@@ -294,8 +285,8 @@ class RiskTile extends StatelessWidget {
   }
 }
 
-/// Coloured risk header (code, country, one-liner, ACAPS rating). Also used for
-/// the "forecast matured" block, so both look like the same risk card.
+/// Risk header (countries, ID, one-liner, ACAPS rating). Also used for the
+/// "forecast matured" block, so both look like the same dossier.
 class RiskHeader extends StatelessWidget {
   final Risk risk;
   final Widget? footer;
@@ -305,37 +296,52 @@ class RiskHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
     final p = risk.probabilityIdx;
     return Container(
       decoration: BoxDecoration(
-        color: levelColor(risk.level).withAlpha(dark ? 45 : 26),
-        borderRadius: BorderRadius.circular(16),
+        color: cs.surfaceContainerLowest,
+        border: Border(top: BorderSide(color: p == null ? cs.onSurface : scaleColors[p], width: 8)),
       ),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Expanded(
-                child: Text(
-                  '${risk.id}  ·  ${risk.country.toUpperCase()}',
-                  style: TextStyle(fontSize: 11.5, letterSpacing: 0.9, fontWeight: FontWeight.w800, color: cs.onSurfaceVariant),
-                ),
-              ),
-              LevelBadge(risk.level),
+              Expanded(child: IsoCode(risk, size: 26)),
+              Text(risk.id, style: mono(13, weight: FontWeight.w700, color: cs.onSurfaceVariant)),
             ],
           ),
-          const SizedBox(height: 8),
-          Text(risk.oneLiner, style: t.titleMedium),
+          const SizedBox(height: 2),
+          Text(risk.country, style: t.bodySmall),
           const SizedBox(height: 10),
+          Text(risk.oneLiner, style: t.titleLarge),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 14,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('ACAPS ', style: mono(11, weight: FontWeight.w700, color: cs.onSurfaceVariant, spacing: 1)),
+                HeatChip(p == null ? null : p + 1),
+              ]),
+              if (risk.impact != null)
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text('IMPACT ', style: mono(11, weight: FontWeight.w700, color: cs.onSurfaceVariant, spacing: 1)),
+                  Pips(risk.impact),
+                  Text('  ${risk.impact}/5', style: mono(11.5, weight: FontWeight.w700, color: cs.onSurface)),
+                ]),
+            ],
+          ),
+          // Plain words too, so colour never carries the meaning alone.
+          const SizedBox(height: 8),
           Text(
             'ACAPS: ${p == null ? 'unrated' : '${levelLabels[p].toLowerCase()} probability (${probabilityRanges[p]})'}'
             '${risk.impact == null ? '' : ' · impact ${risk.impact}/5'}',
             style: t.bodySmall,
           ),
-          if (footer != null) ...[const SizedBox(height: 12), footer!],
+          if (footer != null) ...[const SizedBox(height: 14), footer!],
         ],
       ),
     );
@@ -350,6 +356,7 @@ class Reveal extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) return child;
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
       duration: Duration(milliseconds: 380 + delayMs),
@@ -363,6 +370,7 @@ class Reveal extends StatelessWidget {
   }
 }
 
+/// A note: a thick bar in its colour on the left, icon and text.
 class InfoBanner extends StatelessWidget {
   final IconData icon;
   final String text;
@@ -371,20 +379,20 @@ class InfoBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = color ?? Theme.of(context).colorScheme.tertiary;
+    final cs = Theme.of(context).colorScheme;
+    final c = color ?? cs.onSurface;
     return Container(
-      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: c.withAlpha(30),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: c.withAlpha(90)),
+        color: cs.surfaceContainerLowest,
+        border: Border(left: BorderSide(color: c, width: 5)),
       ),
+      padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(icon, color: c, size: 20),
           const SizedBox(width: 10),
-          Expanded(child: Text(text, style: const TextStyle(fontSize: 13.5))),
+          Expanded(child: Text(text, style: TextStyle(fontSize: 14, height: 1.4, color: cs.onSurface))),
         ],
       ),
     );
@@ -446,11 +454,10 @@ class DisplaySettings extends StatelessWidget {
                   ),
                 ),
                 SizedBox(
-                  width: 48,
-                  child: Text('${(appState.textScale * 100).round()}%', textAlign: TextAlign.end,
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                  width: 52,
+                  child: Text('${(appState.textScale * 100).round()}%', textAlign: TextAlign.end, style: mono(14, weight: FontWeight.w700)),
                 ),
-                const Text('A', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                const Text('A', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
               ],
             ),
           ],

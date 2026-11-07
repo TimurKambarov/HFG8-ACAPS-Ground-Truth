@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../design.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
@@ -38,6 +39,15 @@ class _Draft {
 
   ItemAnswer toAnswer() => ItemAnswer(agree: agree!, severity: severity!, missing: missing.text.trim());
 }
+
+/// A forward action: the label and an arrow, on an ink slab.
+Widget _forward(String label, VoidCallback? onPressed, {IconData icon = Icons.arrow_forward}) => FilledButton(
+      onPressed: onPressed,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [Flexible(child: Text(label)), const SizedBox(width: 10), Icon(icon, size: 20)],
+      ),
+    );
 
 /// Risk survey: intro -> one ground-truthing screen per trigger -> one
 /// scored forecast for the whole risk -> thank you + group summary.
@@ -118,14 +128,8 @@ class _SurveyScreenState extends State<SurveyScreen> {
                     : step == forecastStep
                         ? '${r.id} · Your forecast'
                         : (r.isResolved ? '${r.id} · What happened' : 'Group summary'),
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
           ),
-          bottom: inQuestions
-              ? PreferredSize(
-                  preferredSize: const Size.fromHeight(4),
-                  child: LinearProgressIndicator(value: step / forecastStep, minHeight: 4),
-                )
-              : null,
+          bottom: inQuestions ? SegmentProgress(step: step, total: forecastStep) : null,
         ),
         body: AnimatedSwitcher(
           duration: const Duration(milliseconds: 220),
@@ -154,8 +158,9 @@ class _SurveyScreenState extends State<SurveyScreen> {
           ),
         ),
         bottomNavigationBar: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+          child: Container(
+            decoration: BoxDecoration(border: Border(top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant))),
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
             child: _buttons(context),
           ),
         ),
@@ -170,18 +175,16 @@ class _SurveyScreenState extends State<SurveyScreen> {
         children: [
           if (r.isActive && me != null) ...[
             TextButton(
-              style: TextButton.styleFrom(minimumSize: const Size(0, 52)),
+              style: TextButton.styleFrom(minimumSize: const Size(0, 56)),
               onPressed: () {
                 notNow(context, r);
                 Navigator.of(context).pop();
               },
               child: const Text('Not now'),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 12),
           ],
-          Expanded(
-            child: FilledButton.icon(onPressed: () => _go(1), icon: const Icon(Icons.play_arrow), label: const Text('Start')),
-          ),
+          Expanded(child: _forward('Start', () => _go(1))),
         ],
       );
     }
@@ -191,17 +194,12 @@ class _SurveyScreenState extends State<SurveyScreen> {
       return Row(
         children: [
           OutlinedButton(
-            style: OutlinedButton.styleFrom(minimumSize: const Size(64, 52)),
+            style: OutlinedButton.styleFrom(minimumSize: const Size(64, 56)),
             onPressed: () => _go(step - 1),
             child: const Icon(Icons.arrow_back),
           ),
           const SizedBox(width: 10),
-          Expanded(
-            child: FilledButton(
-              onPressed: ok ? () => _go(step + 1) : null,
-              child: Text(last ? 'Send answers' : 'Next'),
-            ),
-          ),
+          Expanded(child: _forward(last ? 'Send answers' : 'Next', ok ? () => _go(step + 1) : null, icon: last ? Icons.send : Icons.arrow_forward)),
         ],
       );
     }
@@ -211,7 +209,7 @@ class _SurveyScreenState extends State<SurveyScreen> {
         if (!locked) ...[
           Expanded(
             child: OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(56)),
               onPressed: () => setState(() => step = 1),
               icon: const Icon(Icons.edit_outlined),
               label: const Text('Change answer'),
@@ -228,61 +226,75 @@ class _SurveyScreenState extends State<SurveyScreen> {
 
   Widget _intro(BuildContext context) {
     final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       children: [
         if (widget.fromNotification && r.isActive) ...[
           InfoBanner(
             icon: Icons.notifications_active_outlined,
-            color: Theme.of(context).colorScheme.primary,
+            color: youColor(context),
             text: 'ACAPS updated this risk in ${AppState.riskCountries(r).join(', ')}. Got 2 minutes?',
           ),
           const SizedBox(height: 12),
         ],
         RiskHeader(risk: r),
-        const SizedBox(height: 16),
-        Text(
-          '${items.length + 1} short screens, about 2 minutes: '
-          '${items.length == 1 ? 'the risk' : '${items.length} triggers'}, then one forecast. '
-          'You answer before you see the group, so your view stays independent.',
-          style: t.bodyMedium,
+        const SizedBox(height: 18),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${items.length + 1}', style: mono(40, weight: FontWeight.w700, color: cs.onSurface, spacing: -1)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'short screens, about 2 minutes: '
+                '${items.length == 1 ? 'the risk' : '${items.length} triggers'}, then one forecast. '
+                'You answer before you see the group, so your view stays independent.',
+                style: t.bodyMedium,
+              ),
+            ),
+          ],
         ),
         // Always visible: exposure and triggers.
         if (r.exposure.isNotEmpty) ...[
           const SectionLabel('Expected exposure'),
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const Icon(Icons.groups_outlined, size: 20),
+              Text(r.exposure, style: mono(20, weight: FontWeight.w700, color: cs.onSurface)),
               const SizedBox(width: 8),
-              Expanded(child: Text(r.exposure, style: t.bodyMedium)),
+              Expanded(child: Text('people may need assistance', style: t.bodySmall)),
             ],
           ),
         ],
         if (r.triggers.isNotEmpty) ...[
           const SectionLabel('Triggers ACAPS is watching'),
-          for (final tr in r.triggers.take(3))
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Row(
+          for (final (i, tr) in r.triggers.take(3).indexed)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+              color: cs.surfaceContainerLowest,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.flag_outlined, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(tr.title)),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('T${i + 1}', style: mono(13, weight: FontWeight.w700, color: cs.onSurfaceVariant)),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(tr.title, style: t.titleSmall)),
+                    ],
+                  ),
                   if (tr.completion != null) ...[
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 44,
-                      child: LinearProgressIndicator(
-                        value: tr.completion! / 100,
-                        minHeight: 6,
-                        borderRadius: BorderRadius.circular(3),
-                        color: Color.lerp(scaleColors[1], scaleColors[4], tr.completion! / 100),
-                        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-                      ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        const SizedBox(width: 30),
+                        Expanded(child: CellMeter(tr.completion!, height: 7)),
+                        const SizedBox(width: 10),
+                        Text('${tr.completion}%', style: mono(12.5, weight: FontWeight.w700, color: cs.onSurface)),
+                      ],
                     ),
-                    const SizedBox(width: 6),
-                    Text('${tr.completion}%', style: t.bodySmall),
                   ],
                 ],
               ),
@@ -341,48 +353,35 @@ class _ItemPageState extends State<_ItemPage> {
     }
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
       children: [
-        Text(
-          widget.total == 1 ? 'THE RISK' : 'TRIGGER ${widget.index + 1} OF ${widget.total}',
-          style: TextStyle(fontSize: 11.5, letterSpacing: 1, fontWeight: FontWeight.w800, color: cs.onSurfaceVariant),
-        ),
-        const SizedBox(height: 6),
-        Text(it.title, style: t.titleLarge),
+        Eyebrow(widget.total == 1 ? 'THE RISK' : 'TRIGGER ${widget.index + 1} OF ${widget.total}'),
+        const SizedBox(height: 10),
+        Text(it.title, style: t.headlineSmall?.copyWith(fontSize: 26)),
         if (c != null) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           Row(
             children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: c / 100,
-                    minHeight: 8,
-                    color: Color.lerp(scaleColors[1], scaleColors[4], c / 100),
-                    backgroundColor: cs.surfaceContainerHighest,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Text('$c%', style: const TextStyle(fontWeight: FontWeight.w800)),
+              Expanded(child: CellMeter(c, height: 12)),
+              const SizedBox(width: 12),
+              Text('$c%', style: mono(18, weight: FontWeight.w700, color: cs.onSurface)),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 6),
           Text('How close ACAPS thinks this trigger is to being reached', style: t.bodySmall),
         ],
         if (it.description.isNotEmpty) ...[
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Text(
             it.description,
             maxLines: _more ? null : 3,
             overflow: _more ? null : TextOverflow.ellipsis,
-            style: t.bodySmall?.copyWith(height: 1.45),
+            style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton(
-              style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 32)),
+              style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 36)),
               onPressed: () => setState(() => _more = !_more),
               child: Text(_more ? 'Less' : 'Read more'),
             ),
@@ -391,21 +390,12 @@ class _ItemPageState extends State<_ItemPage> {
         _Question(
           n: 1,
           text: c == null ? 'Do you agree with the ACAPS assessment?' : 'Do you agree with ACAPS on this trigger?',
-          child: SizedBox(
-            width: double.infinity,
-            child: SegmentedButton<Agreement>(
-              emptySelectionAllowed: true,
-              showSelectedIcon: false,
-              segments: [for (final a in Agreement.values) ButtonSegment(value: a, label: Text(a.label))],
-              selected: {if (d.agree != null) d.agree!},
-              onSelectionChanged: (s) => set(() => d.agree = s.firstOrNull),
-            ),
-          ),
+          child: AgreePicker(value: d.agree, onSelect: (a) => set(() => d.agree = a)),
         ),
         _Question(
           n: 2,
           text: 'How bad would it be?',
-          child: ScalePicker(value: d.severity, labels: severityLabels, onSelect: (v) => set(() => d.severity = v)),
+          child: SeverityPicker(value: d.severity, labels: severityLabels, onSelect: (v) => set(() => d.severity = v)),
         ),
         _Question(
           n: 3,
@@ -420,8 +410,8 @@ class _ItemPageState extends State<_ItemPage> {
         ),
         Row(
           children: [
-            Icon(Icons.lock_outline, size: 14, color: cs.onSurfaceVariant),
-            const SizedBox(width: 4),
+            Icon(Icons.lock_outline, size: 15, color: cs.onSurfaceVariant),
+            const SizedBox(width: 6),
             Expanded(
               child: Text(
                 appState.me!.hideFromOtherCountries
@@ -442,7 +432,7 @@ class _ItemPageState extends State<_ItemPage> {
 // The one scored question: will the whole risk materialise in 6 months?
 // ---------------------------------------------------------------------------
 
-/// ACAPS's scale with its ranges, as shown on the forecast buttons.
+/// ACAPS's scale with its ranges, as shown under the forecast blocks.
 final forecastButtonLabels = [for (var i = 0; i < 5; i++) '${levelLabels[i]}\n${probabilityRanges[i]}'];
 
 class _ForecastPage extends StatelessWidget {
@@ -461,34 +451,56 @@ class _ForecastPage extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final by = DateTime.now().add(forecastHorizon);
     final acaps = risk.acapsLikelihood;
+    final v = value;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
       children: [
-        Row(
-          children: [
-            Icon(Icons.track_changes, size: 16, color: cs.primary),
-            const SizedBox(width: 6),
-            Text('YOUR FORECAST · SCORED',
-                style: TextStyle(fontSize: 11.5, letterSpacing: 1, fontWeight: FontWeight.w800, color: cs.primary)),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Text('Will this risk materialise before ${formatDate(by)}?', style: t.titleLarge),
+        const Eyebrow('YOUR FORECAST · SCORED'),
         const SizedBox(height: 10),
+        Text('Will this risk materialise before ${formatDate(by)}?', style: t.headlineSmall?.copyWith(fontSize: 26)),
+        const SizedBox(height: 12),
         Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
-          child: Text(risk.title, style: t.bodyMedium),
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          decoration: BoxDecoration(border: Border(left: BorderSide(color: cs.onSurface, width: 3))),
+          child: Text(risk.title, style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
         ),
-        const SizedBox(height: 20),
-        ScalePicker(value: value, labels: forecastButtonLabels, onSelect: onSelect),
+        const SizedBox(height: 18),
+        // Live read-out of the choice, in its heat colour.
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          child: Container(
+            key: ValueKey(v),
+            height: 74,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            color: v == null ? cs.surfaceContainerLowest : scaleColors[v - 1],
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    v == null ? 'Tap a step' : levelLabels[v - 1].toUpperCase(),
+                    style: TextStyle(
+                      fontFamily: fontText,
+                      fontSize: v == null ? 20 : 34,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.5,
+                      color: v == null ? cs.onSurfaceVariant : onScale(v),
+                    ),
+                  ),
+                ),
+                if (v != null) Text(probabilityRanges[v - 1], style: mono(22, weight: FontWeight.w700, color: onScale(v))),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        HeatScale(value: v, acaps: acaps, labels: forecastButtonLabels, onSelect: onSelect),
         const SizedBox(height: 10),
         Text(
           [
-            if (value != null) 'You: ${probabilityText(value!)}.',
+            if (v != null) 'You: ${probabilityText(v)}.',
             if (acaps != null) 'ACAPS: ${probabilityText(acaps)}.',
           ].join('  '),
-          style: const TextStyle(fontWeight: FontWeight.w700),
+          style: const TextStyle(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 10),
         Text(
@@ -514,7 +526,6 @@ class CreditPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
     final shown = publicCredit(expert, value);
     final isDefault = value == defaultCredit(expert);
     return Card(
@@ -523,13 +534,9 @@ class CreditPicker extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Icon(Icons.badge_outlined, size: 20, color: cs.primary),
-                const SizedBox(width: 8),
-                Expanded(child: Text('If ACAPS publishes this risk, credit me as', style: t.titleSmall)),
-              ],
-            ),
+            const Eyebrow('IF ACAPS PUBLISHES THIS RISK'),
+            const SizedBox(height: 8),
+            Text('Credit me as', style: t.titleMedium),
             const SizedBox(height: 10),
             SegmentedButton<Credit>(
               showSelectedIcon: false,
@@ -567,84 +574,37 @@ class _Question extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.only(top: 20),
+      padding: const EdgeInsets.only(top: 26),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(
-                radius: 11,
-                backgroundColor: cs.primary.withAlpha(30),
-                child: Text('$n', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: cs.primary)),
+              Container(
+                width: 28,
+                height: 28,
+                color: cs.onSurface,
+                alignment: Alignment.center,
+                child: Text('$n', style: mono(14, weight: FontWeight.w700, color: cs.surface, spacing: 0)),
               ),
-              const SizedBox(width: 8),
-              Expanded(child: Text(text, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15))),
-              if (optional) Text('optional', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text(text, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17, height: 1.25)),
+                ),
+              ),
+              if (optional)
+                Padding(
+                  padding: const EdgeInsets.only(top: 5),
+                  child: Text('OPTIONAL', style: mono(10.5, weight: FontWeight.w700, color: cs.onSurfaceVariant, spacing: 1)),
+                ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           child,
         ],
-      ),
-    );
-  }
-}
-
-/// 1..5 picker.
-class ScalePicker extends StatelessWidget {
-  final int? value;
-  final List<String> labels;
-  final ValueChanged<int> onSelect;
-  const ScalePicker({super.key, required this.value, required this.labels, required this.onSelect});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return IntrinsicHeight(
-      child: Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (var i = 1; i <= 5; i++)
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 3),
-              child: Material(
-                color: value == i ? scaleColors[i - 1] : scaleColors[i - 1].withAlpha(26),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(color: scaleColors[i - 1].withAlpha(value == i ? 255 : 80), width: 1.5),
-                ),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: () => onSelect(i),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(minHeight: 64),
-                    child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text('$i',
-                            style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w800,
-                                color: value == i ? Colors.white : scaleColors[i - 1])),
-                        Text(
-                          labels[i - 1],
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          style: TextStyle(fontSize: 9.5, height: 1.1, color: value == i ? Colors.white : cs.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ],
       ),
     );
   }
@@ -670,21 +630,35 @@ class _Summary extends StatelessWidget {
     final items = risk.surveyItems;
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       children: [
         if (mine != null)
           Reveal(
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.volunteer_activism_outlined, color: cs.primary, size: 30),
+                Container(
+                  width: 44,
+                  height: 44,
+                  color: youColor(context),
+                  child: const Icon(Icons.check, color: Colors.white, size: 28),
+                ),
                 const SizedBox(width: 12),
-                Expanded(child: Text('Thank you. Here is how your group sees it.', style: t.titleMedium)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Thank you.', style: t.headlineSmall),
+                      Text('Here is how your group sees it.', style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 16),
         if (risk.isResolved && mine == null) ...[
-          InfoBanner(
+          const InfoBanner(
             icon: Icons.lock_clock_outlined,
             text: 'This risk has closed. You can see what happened and how the group saw it. '
                 'Answers are no longer accepted, so there are no points here.',
@@ -709,14 +683,15 @@ class _Summary extends StatelessWidget {
             comments: comments.where((c) => c.itemId == items[i].id).toList()
               ..sort((a, b) => b.agreeIds.length.compareTo(a.agreeIds.length)),
           ),
-          if (i < items.length - 1) const Divider(height: 36),
+          if (i < items.length - 1) const SizedBox(height: 28),
         ],
       ],
     );
   }
 }
 
-/// "6 of 8 answered", split into experts from the risk country and from elsewhere.
+/// "6 of 8 answered", as a number and as dots, split into experts from the
+/// risk country and from elsewhere.
 class RespondentsCard extends StatelessWidget {
   final Risk risk;
   final List<Expert> answered;
@@ -731,6 +706,8 @@ class RespondentsCard extends StatelessWidget {
     final split = splitByRiskCountry(answered, rc);
     final localN = split.local.fold(0, (a, x) => a + x.n);
     final otherN = split.other.fold(0, (a, x) => a + x.n);
+    final me = appState.me;
+    final youIn = me != null && answered.any((e) => e.id == me.id);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -738,16 +715,27 @@ class RespondentsCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text('${answered.length}', style: t.headlineMedium?.copyWith(color: cs.primary)),
-                Text(' of $panelSize', style: t.titleMedium),
-                const SizedBox(width: 12),
-                Expanded(child: Text('experts on this panel have answered. Names are never shown here.', style: t.bodySmall)),
+                Text('${answered.length}', style: mono(44, weight: FontWeight.w700, color: cs.onSurface, spacing: -1.5)),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(' of $panelSize', style: mono(18, weight: FontWeight.w700, color: cs.onSurfaceVariant)),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text('experts on this panel have answered. Names are never shown here.', style: t.bodySmall),
+                  ),
+                ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
+            PanelDots(total: panelSize, answered: answered.length, youAnswered: youIn, size: 13),
+            const SizedBox(height: 14),
             _SplitRow(icon: Icons.place, label: 'From ${rc.join(', ')}', n: localN),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             _SplitRow(
               icon: Icons.public,
               label: 'From other countries',
@@ -774,18 +762,18 @@ class _SplitRow extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 18, color: cs.primary),
+        Icon(icon, size: 18, color: cs.onSurface),
         const SizedBox(width: 8),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
-              if (detail != null) Text(detail!, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+              Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+              if (detail != null) Text(detail!, style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant)),
             ],
           ),
         ),
-        Text('$n', style: const TextStyle(fontWeight: FontWeight.w800)),
+        Text('$n', style: mono(16, weight: FontWeight.w700, color: cs.onSurface)),
       ],
     );
   }
@@ -813,17 +801,25 @@ class GroupLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
     final g = group;
-    final splitColor = agreementColors[Agreement.partly]!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (g.split) ...[Icon(Icons.call_split, size: 18, color: splitColor), const SizedBox(width: 6)],
+            if (g.split) ...[
+              Container(
+                margin: const EdgeInsets.only(top: 2, right: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                color: cs.error,
+                child: Text('SPLIT', style: mono(11, weight: FontWeight.w700, color: Colors.white, spacing: 1)),
+              ),
+            ],
             Expanded(
               child: Text(forecast ? g.probabilityHeadline : g.severityHeadline,
-                  style: t.titleSmall?.copyWith(color: g.split ? splitColor : null)),
+                  style: t.titleMedium?.copyWith(fontWeight: FontWeight.w800, color: g.split ? cs.error : null)),
             ),
           ],
         ),
@@ -836,7 +832,7 @@ class GroupLine extends StatelessWidget {
 }
 
 /// How the panel's view moved since the last update cycle (about a month):
-/// "Since 8 Oct 2026: Medium → High · 3 of 7 experts changed their forecast".
+/// "Since 8 Oct 2026: Medium to High · 3 of 7 experts changed their forecast".
 class TrendLine extends StatelessWidget {
   final Risk risk;
   const TrendLine({super.key, required this.risk});
@@ -850,29 +846,36 @@ class TrendLine extends StatelessWidget {
     final moved = tr.now.median - tr.then.median;
     final same = tr.then.short == tr.now.short;
     final (icon, color) = moved > 0
-        ? (Icons.trending_up, agreementColors[Agreement.no]!)
+        ? (Icons.trending_up, AppColors.high)
         : moved < 0
-            ? (Icons.trending_down, agreementColors[Agreement.yes]!)
+            ? (Icons.trending_down, AppColors.low)
             : (Icons.trending_flat, cs.onSurfaceVariant);
+    final strong = TextStyle(fontWeight: FontWeight.w800, color: same ? cs.onSurface : color);
     return Container(
-      margin: const EdgeInsets.only(top: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(120), borderRadius: BorderRadius.circular(10)),
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.fromLTRB(10, 10, 12, 10),
+      decoration: BoxDecoration(border: Border.all(color: same ? cs.outlineVariant : color, width: 2)),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: color),
-          const SizedBox(width: 8),
+          Icon(icon, size: 22, color: color),
+          const SizedBox(width: 10),
           Expanded(
             child: Text.rich(
               TextSpan(children: [
-                TextSpan(text: 'Since ${formatDate(tr.since)}: '),
-                TextSpan(
-                  text: same ? 'no change (${tr.now.short})' : '${tr.then.short} → ${tr.now.short}',
-                  style: TextStyle(fontWeight: FontWeight.w800, color: same ? null : color),
-                ),
+                TextSpan(text: 'Since ${formatDate(tr.since)}: ', style: mono(12.5, color: cs.onSurfaceVariant, spacing: 0)),
+                if (same)
+                  TextSpan(text: 'no change (${tr.now.short})', style: strong)
+                else ...[
+                  TextSpan(text: tr.then.short, style: strong),
+                  WidgetSpan(
+                    alignment: PlaceholderAlignment.middle,
+                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4), child: Icon(Icons.arrow_forward, size: 15, color: color)),
+                  ),
+                  TextSpan(text: tr.now.short, style: strong),
+                ],
                 TextSpan(text: ' · ${tr.changed} of ${tr.now.n} experts changed their forecast'),
               ]),
-              style: t.bodySmall,
+              style: t.bodySmall?.copyWith(color: cs.onSurface),
             ),
           ),
         ],
@@ -881,9 +884,9 @@ class TrendLine extends StatelessWidget {
   }
 }
 
-/// The group's forecasts for the whole risk on the ACAPS scale: the median
-/// as the group answer, the spread, and every answer in the chart with
-/// "you" and ACAPS marked.
+/// The group's forecasts for the whole risk on the ACAPS scale: every expert
+/// a dot above their answer, the group (median, middle half) under the
+/// scale, ACAPS and you marked.
 class ForecastSummary extends StatelessWidget {
   final Risk risk;
   final int? mine;
@@ -892,11 +895,11 @@ class ForecastSummary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
-    final fs = appState.forecastsFor(risk);
+    final fs = appState.forecastsFor(risk).toList();
     final g = GroupView.of(fs);
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -904,7 +907,8 @@ class ForecastSummary extends StatelessWidget {
               Text('No forecasts yet.', style: t.labelLarge)
             else
               GroupLine(group: g, forecast: true, noun: 'forecast'),
-            Distribution(counts: countsOf(fs), mine: mine, acaps: risk.acapsLikelihood, labels: forecastButtonLabels),
+            const SizedBox(height: 14),
+            HeatScale(crowd: fs, value: mine, acaps: risk.acapsLikelihood, group: g, labels: forecastButtonLabels),
             TrendLine(risk: risk),
           ],
         ),
@@ -942,12 +946,13 @@ class ItemSummary extends StatelessWidget {
             Text('Agree with ACAPS', style: t.labelLarge),
             const SizedBox(height: 8),
             AgreementBar(counts: agree, mine: mine?.agree),
-            const SizedBox(height: 16),
+            const SizedBox(height: 20),
             Text('How bad it would be', style: t.labelLarge),
             if (GroupView.of(answers.map((a) => a.severity)) case final g?) ...[
               const SizedBox(height: 6),
               GroupLine(group: g, forecast: false, noun: 'answer'),
             ],
+            const SizedBox(height: 8),
             Distribution(counts: count((a) => a.severity), mine: mine?.severity, acaps: risk.impact),
           ],
         ),
@@ -957,13 +962,13 @@ class ItemSummary extends StatelessWidget {
 }
 
 const agreementColors = {
-  Agreement.yes: Color(0xFF4E9A61),
-  Agreement.partly: Color(0xFFD1A03A),
-  Agreement.no: Color(0xFFB03A2E),
+  Agreement.yes: Color(0xFF2F7A57),
+  Agreement.partly: Color(0xFF9A9C96),
+  Agreement.no: AppColors.high,
 };
 
 /// Read-only stacked bar of yes / partly / no, with a plain-text legend.
-/// Deliberately not chip-shaped, so it doesn't look tappable.
+/// Deliberately not key-shaped, so it doesn't look tappable.
 class AgreementBar extends StatelessWidget {
   final Map<Agreement, int> counts;
   final Agreement? mine;
@@ -976,20 +981,24 @@ class AgreementBar extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(5),
-          child: SizedBox(
-            height: 10,
-            width: double.infinity,
-            child: total == 0
-                ? Container(color: cs.surfaceContainerHighest)
-                : Row(
-                    children: [
-                      for (final a in Agreement.values)
-                        if (counts[a]! > 0) Expanded(flex: counts[a]!, child: Container(color: agreementColors[a]!)),
-                    ],
-                  ),
-          ),
+        SizedBox(
+          height: 16,
+          width: double.infinity,
+          child: total == 0
+              ? Container(color: cs.outlineVariant)
+              : Row(
+                  children: [
+                    for (final a in Agreement.values)
+                      if (counts[a]! > 0)
+                        Expanded(
+                          flex: counts[a]!,
+                          child: Container(
+                            margin: const EdgeInsets.only(right: 2),
+                            color: agreementColors[a]!,
+                          ),
+                        ),
+                  ],
+                ),
         ),
         const SizedBox(height: 8),
         Wrap(
@@ -1000,12 +1009,14 @@ class AgreementBar extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(width: 9, height: 9, decoration: BoxDecoration(color: agreementColors[a], shape: BoxShape.circle)),
+                  Container(width: 10, height: 10, color: agreementColors[a]),
                   const SizedBox(width: 5),
                   Text('${a.label} ${counts[a]}',
-                      style: TextStyle(fontSize: 13, fontWeight: mine == a ? FontWeight.w800 : FontWeight.w400)),
-                  if (mine == a)
-                    Text('  (you)', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                      style: TextStyle(fontSize: 13, fontWeight: mine == a ? FontWeight.w800 : FontWeight.w500)),
+                  if (mine == a) ...[
+                    const SizedBox(width: 5),
+                    PersonDot(you: true, size: 9),
+                  ],
                 ],
               ),
           ],
@@ -1027,14 +1038,16 @@ class QuestionHeader extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     return Padding(
-      padding: const EdgeInsets.only(top: 18, bottom: 10),
+      padding: const EdgeInsets.only(top: 8, bottom: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
-            radius: 14,
-            backgroundColor: cs.primary,
-            child: Text('$number', style: TextStyle(color: cs.onPrimary, fontWeight: FontWeight.w800, fontSize: 13)),
+          Container(
+            width: 32,
+            height: 32,
+            color: cs.onSurface,
+            alignment: Alignment.center,
+            child: Text('T$number', style: mono(13, weight: FontWeight.w700, color: cs.surface, spacing: 0)),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -1042,8 +1055,8 @@ class QuestionHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(total == 1 ? 'THE RISK' : 'TRIGGER $number OF $total',
-                    style: TextStyle(fontSize: 11, letterSpacing: 1, fontWeight: FontWeight.w800, color: cs.primary)),
-                Text(title, style: t.titleSmall),
+                    style: mono(11, weight: FontWeight.w700, color: cs.onSurfaceVariant, spacing: 1.2)),
+                Text(title, style: t.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
               ],
             ),
           ),
@@ -1063,15 +1076,15 @@ class CommentGroup extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     return Container(
-      margin: const EdgeInsets.only(top: 12, left: 8),
+      margin: const EdgeInsets.only(top: 12, left: 4),
       padding: const EdgeInsets.only(left: 12),
-      decoration: BoxDecoration(border: Border(left: BorderSide(color: cs.primary.withAlpha(150), width: 3))),
+      decoration: BoxDecoration(border: Border(left: BorderSide(color: cs.onSurface, width: 3))),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.forum_outlined, size: 16, color: cs.primary),
+              Icon(Icons.forum_outlined, size: 16, color: cs.onSurface),
               const SizedBox(width: 6),
               Text('What ACAPS is missing · ${comments.length}', style: t.labelLarge),
             ],
@@ -1090,9 +1103,9 @@ class CommentGroup extends StatelessWidget {
   }
 }
 
-/// Bar chart over 1..5 with "you are here" and the ACAPS rating marked.
-/// Bars and labels are separate rows, so labels never squeeze the bars
-/// (and grow with the text size setting).
+/// Answers on 1..5 as dots above the scale: every expert a dot, you blue,
+/// ACAPS marked, the group under the blocks. Heat colours for the ACAPS
+/// probability scale ([labels] = its words), a grey ramp for "how bad".
 class Distribution extends StatelessWidget {
   final List<int> counts;
   final int? mine;
@@ -1104,62 +1117,24 @@ class Distribution extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final maxC = counts.fold(1, (a, b) => a > b ? a : b);
-    Widget cell(Widget child) => Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 3), child: child));
+    final crowd = [for (var i = 1; i <= 5; i++) ...List.filled(counts[i - 1], i)];
+    final probability = labels != null && labels!.length == 5 && labels!.first.contains('%');
     return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Column(
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              for (var i = 1; i <= 5; i++)
-                cell(Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text('${counts[i - 1]}', style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
-                    const SizedBox(height: 2),
-                    Container(
-                      height: 6 + 54.0 * counts[i - 1] / maxC,
-                      decoration: BoxDecoration(
-                        color: scaleColors[i - 1].withAlpha(mine == i ? 255 : 130),
-                        borderRadius: BorderRadius.circular(6),
-                        border: mine == i ? Border.all(color: cs.onSurface, width: 2) : null,
-                      ),
-                    ),
-                  ],
-                )),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (var i = 1; i <= 5; i++)
-                cell(Column(
-                  children: [
-                    Text('$i', style: TextStyle(fontWeight: mine == i ? FontWeight.w800 : FontWeight.w500)),
-                    if (labels != null)
-                      Text(labels![i - 1],
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 9.5, height: 1.15, color: cs.onSurfaceVariant)),
-                    if (mine == i)
-                      const Text('you are here', textAlign: TextAlign.center, style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800)),
-                    if (acaps == i)
-                      const Padding(padding: EdgeInsets.only(top: 2), child: FittedBox(fit: BoxFit.scaleDown, child: Pill('ACAPS'))),
-                  ],
-                )),
-            ],
-          ),
-        ],
+      padding: const EdgeInsets.only(top: 6),
+      child: HeatScale(
+        crowd: crowd,
+        value: mine,
+        acaps: acaps,
+        group: GroupView.of(crowd),
+        labels: labels ?? [for (var i = 0; i < 5; i++) '${i + 1}\n${severityLabels[i]}'],
+        colors: probability ? scaleColors : greyRamp,
       ),
     );
   }
 }
 
-/// Outcome of a closed risk, styled like the risk card. With [response], also
-/// the expert's score for the forecast they made while it was open.
+/// Outcome of a closed risk, styled like the risk dossier. With [response],
+/// also the expert's score for the forecast they made while it was open.
 class MaturedBlock extends StatelessWidget {
   final Risk risk;
   final Response? response;
@@ -1168,9 +1143,9 @@ class MaturedBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
     final s = response == null ? null : appState.scoreOf(response!);
     final happened = risk.materialised;
-    final accent = happened ? AppColors.high : scaleColors[1];
     final text = risk.materialisation.length > 360 ? '${risk.materialisation.substring(0, 360).trimRight()}…' : risk.materialisation;
 
     return RiskHeader(
@@ -1178,18 +1153,26 @@ class MaturedBlock extends StatelessWidget {
       footer: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(happened ? Icons.warning_amber_rounded : Icons.shield_outlined, color: accent),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(happened ? 'What happened: it materialised' : 'What happened: it did not materialise',
-                    style: t.titleSmall?.copyWith(color: accent)),
-              ),
-            ],
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: happened ? AppColors.high : Colors.transparent,
+              border: Border.all(color: happened ? AppColors.high : cs.onSurface, width: 2),
+            ),
+            child: Row(
+              children: [
+                Icon(happened ? Icons.warning_amber_rounded : Icons.shield_outlined, color: happened ? Colors.white : cs.onSurface),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(happened ? 'What happened: it materialised' : 'What happened: it did not materialise',
+                      style: t.titleSmall?.copyWith(color: happened ? Colors.white : cs.onSurface, fontWeight: FontWeight.w800)),
+                ),
+              ],
+            ),
           ),
           if (text.isNotEmpty) ...[
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Text(text, style: t.bodySmall?.copyWith(height: 1.45)),
           ],
           if (risk.fromEarlierList) ...[
@@ -1197,7 +1180,7 @@ class MaturedBlock extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.history_toggle_off, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                Icon(Icons.history_toggle_off, size: 16, color: cs.onSurfaceVariant),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
@@ -1210,19 +1193,19 @@ class MaturedBlock extends StatelessWidget {
             ),
           ],
           if (s != null) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             Text(
               'Your forecast: ${probabilityText(response!.forecast!)}'
               '${risk.acapsLikelihood == null ? '' : ' · ACAPS: ${probabilityText(risk.acapsLikelihood!)}'}',
-              style: t.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+              style: t.bodySmall?.copyWith(fontWeight: FontWeight.w700, color: cs.onSurface),
             ),
             const SizedBox(height: 8),
             Row(
               children: [
                 ScoreBox(label: 'Your accuracy', value: '${accuracyPct(s.mine)}%', highlight: true),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 ScoreBox(label: 'ACAPS accuracy', value: '${accuracyPct(s.acaps)}%'),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 ScoreBox(label: 'Points', value: '+${s.points}'),
               ],
             ),
@@ -1248,18 +1231,19 @@ class ScoreBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final you = youColor(context);
     return Expanded(
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
         decoration: BoxDecoration(
-          color: highlight ? cs.primary.withAlpha(30) : cs.surfaceContainerLowest,
-          borderRadius: BorderRadius.circular(10),
+          color: highlight ? you : Colors.transparent,
+          border: Border.all(color: highlight ? you : cs.onSurface, width: 2),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-            Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            Text(label.toUpperCase(), style: mono(9.5, weight: FontWeight.w700, color: highlight ? Colors.white : cs.onSurfaceVariant, spacing: 0.6)),
+            Text(value, style: mono(22, weight: FontWeight.w700, color: highlight ? Colors.white : cs.onSurface, spacing: -0.5)),
           ],
         ),
       ),
@@ -1300,20 +1284,20 @@ class CommentCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Avatar(name, size: 26),
+                  Avatar(name, size: 22, ring: isMine),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
+                    child: Text(name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
                   ),
                   if (isMine) const Pill('You', strong: true),
                 ],
               ),
               if (item != null && items.length > 1) ...[
                 const SizedBox(height: 4),
-                Text('On: ${item.title}', style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
+                Text('On: ${item.title}', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
               ],
               const SizedBox(height: 8),
-              Text(c.text, style: const TextStyle(height: 1.4)),
+              Text(c.text, style: const TextStyle(height: 1.4, fontSize: 15)),
               if (c.useful || c.usedInRiskId != null) ...[
                 const SizedBox(height: 8),
                 Wrap(spacing: 6, runSpacing: 6, children: [
@@ -1366,16 +1350,15 @@ class _ReactChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final fg = active ? cs.primary : cs.onSurfaceVariant;
+    final fg = active ? cs.surface : cs.onSurface;
     final where = describeSplit(appState.expertsByIds(ids), riskCountries);
     return Tooltip(
       message: where,
       waitDuration: const Duration(milliseconds: 150),
       child: Material(
-        color: active ? cs.primary.withAlpha(26) : Colors.transparent,
-        shape: StadiumBorder(side: BorderSide(color: active ? cs.primary : cs.outlineVariant)),
+        color: active ? cs.onSurface : Colors.transparent,
+        shape: RoundedRectangleBorder(side: BorderSide(color: cs.onSurface, width: 1.5)),
         child: InkWell(
-          customBorder: const StadiumBorder(),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -1383,8 +1366,10 @@ class _ReactChip extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(active ? Icons.check : icon, size: 15, color: fg),
-                const SizedBox(width: 5),
-                Text('$label · ${ids.length}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+                const SizedBox(width: 6),
+                Text(label, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: fg)),
+                const SizedBox(width: 6),
+                Text('${ids.length}', style: mono(12.5, weight: FontWeight.w700, color: fg)),
               ],
             ),
           ),

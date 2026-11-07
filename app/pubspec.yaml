@@ -20,3 +20,23 @@ flutter:
   uses-material-design: true
   assets:
     - assets/risk-radar-export.csv
+  # Atkinson Hyperlegible (SIL Open Font License, Braille Institute via Google
+  # Fonts): designed for readers with low vision, so it stays legible on a
+  # cracked phone in bright sun. Next for text, Mono for numbers and codes.
+  fonts:
+    - family: AtkinsonNext
+      fonts:
+        - asset: assets/fonts/AtkinsonNext-Regular.ttf
+        - asset: assets/fonts/AtkinsonNext-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/AtkinsonNext-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/AtkinsonNext-ExtraBold.ttf
+          weight: 800
+    - family: AtkinsonMono
+      fonts:
+        - asset: assets/fonts/AtkinsonMono-Regular.ttf
+        - asset: assets/fonts/AtkinsonMono-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/AtkinsonMono-Bold.ttf
+          weight: 700

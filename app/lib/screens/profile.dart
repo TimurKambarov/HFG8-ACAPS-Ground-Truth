@@ -1,9 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../design.dart';
 import '../models.dart';
 import '../store.dart';
+import '../theme.dart';
 import '../widgets.dart';
+
+/// Who sees what of [e], inner ring to outer: ACAPS, colleagues from the same
+/// country, colleagues elsewhere, the public.
+List<Audience> audiencesOf(Expert e) {
+  int exposure(String sees) => sees == e.realName && e.realName != null ? 2 : (sees == e.pseudonym ? 1 : 0);
+  Audience a(String who, String sees) => Audience(who, sees, exposure(sees));
+  // Short labels: they sit on curved rings.
+  return [
+    a('ACAPS', nameSeenBy(e, ViewerRole.moderator)),
+    a(e.homeCountry, nameSeenBy(e, ViewerRole.expert, sameCountry: true)),
+    a('Abroad', nameSeenBy(e, ViewerRole.expert)),
+    a('Public', nameSeenBy(e, ViewerRole.public)),
+  ];
+}
 
 class ProfileTab extends StatefulWidget {
   const ProfileTab({super.key});
@@ -93,20 +109,20 @@ class _ProfileTabState extends State<ProfileTab> {
         final name = displayName(me, appState.viewer);
 
         return ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 32),
           children: [
             Row(
               children: [
-                Avatar(name, size: 56),
-                const SizedBox(width: 14),
+                Avatar(name, size: 60, ring: true),
+                const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(name, style: t.titleLarge),
-                      const SizedBox(height: 6),
+                      Text(name, style: t.headlineSmall),
+                      const SizedBox(height: 8),
                       Wrap(spacing: 6, runSpacing: 6, children: [
-                        Pill('Level ${a.number}', icon: anonymityIcon(a)),
+                        Pill('Level ${a.number}', icon: anonymityIcon(a), strong: true),
                         Pill(me.homeCountry, icon: Icons.place_outlined),
                       ]),
                     ],
@@ -117,6 +133,33 @@ class _ProfileTabState extends State<ProfileTab> {
 
             // Forecasts and comment feedback live in the My forecasts tab.
 
+            const SectionLabel('Who sees you'),
+            // How far your name travels: darker = more of you is visible.
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 16, 12, 10),
+                child: Column(
+                  children: [
+                    AnonymityRings(rings: audiencesOf(me)),
+                    const SizedBox(height: 8),
+                    Text('You are the blue dot. Rings: ACAPS, colleagues in ${me.homeCountry}, colleagues abroad, the public.',
+                        textAlign: TextAlign.center, style: t.bodySmall),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 14,
+                      runSpacing: 4,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        _Key(fill: cs.onSurface, label: 'real name'),
+                        _Key(fill: cs.onSurface.withAlpha(95), label: 'pseudonym'),
+                        _Key(fill: cs.surface, label: 'nothing about you', dashed: true),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
             const SectionLabel('Anonymity level'),
             for (final opt in Anonymity.values)
               OptionTile(
@@ -126,23 +169,6 @@ class _ProfileTabState extends State<ProfileTab> {
                 selected: a == opt,
                 onTap: () => _changeLevel(opt),
               ),
-            const SizedBox(height: 8),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Column(
-                  children: [
-                    _WhoRow(icon: Icons.verified_user_outlined, who: 'ACAPS moderators', sees: nameSeenBy(me, ViewerRole.moderator)),
-                    const Divider(),
-                    _WhoRow(icon: Icons.groups_2_outlined, who: 'Colleagues from ${me.homeCountry}', sees: nameSeenBy(me, ViewerRole.expert, sameCountry: true)),
-                    const Divider(),
-                    _WhoRow(icon: Icons.travel_explore, who: 'Colleagues from other countries', sees: nameSeenBy(me, ViewerRole.expert)),
-                    const Divider(),
-                    _WhoRow(icon: Icons.public, who: 'Public', sees: nameSeenBy(me, ViewerRole.public)),
-                  ],
-                ),
-              ),
-            ),
             const SizedBox(height: 8),
             if (a != Anonymity.anonymous)
               Card(
@@ -283,13 +309,13 @@ class _ReferralCard extends StatelessWidget {
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(border: Border.all(color: cs.onSurface, width: 1.5)),
               child: Row(
                 children: [
-                  Icon(Icons.link, color: cs.primary),
+                  Icon(Icons.link, color: cs.onSurface),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: SelectableText(link, style: const TextStyle(fontFamily: 'monospace', fontSize: 13, fontWeight: FontWeight.w700)),
+                    child: SelectableText(link, style: mono(13, weight: FontWeight.w700, color: cs.onSurface, spacing: 0.2)),
                   ),
                 ],
               ),
@@ -544,6 +570,31 @@ class _CountryPickerState extends State<_CountryPicker> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Legend swatch for the rings.
+class _Key extends StatelessWidget {
+  final Color fill;
+  final String label;
+  final bool dashed;
+  const _Key({required this.fill, required this.label, this.dashed = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(color: fill, border: Border.all(color: cs.onSurface, width: dashed ? 1 : 0)),
+        ),
+        const SizedBox(width: 5),
+        Text(label, style: mono(11, color: cs.onSurfaceVariant, spacing: 0.3)),
+      ],
     );
   }
 }

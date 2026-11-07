@@ -1,10 +1,18 @@
 import 'package:flutter/material.dart';
 
+import '../design.dart';
 import '../models.dart';
 import '../store.dart';
+import '../theme.dart';
 import '../widgets.dart';
 import 'profile.dart';
 import 'survey.dart';
+
+/// Mono date line, e.g. "SAT 8 NOV 2026".
+String _dateLine(DateTime d) {
+  const days = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+  return '${days[d.weekday - 1]} ${formatDate(d).toUpperCase()}';
+}
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -158,12 +166,19 @@ class _InboxTabState extends State<InboxTab> {
         final shownArchive = _allArchive || searching ? archive : archive.take(5);
 
         return ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
           children: [
-            Text('Hi, ${displayName(me, appState.viewer)}', style: t.headlineSmall),
-            const SizedBox(height: 4),
+            Row(
+              children: [
+                Expanded(child: Text(_dateLine(DateTime.now()), style: t.labelSmall)),
+                Text('GROUND TRUTH', style: mono(11, weight: FontWeight.w700, color: Theme.of(context).colorScheme.onSurface, spacing: 1.6)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text('Hi, ${displayName(me, appState.viewer)}', style: t.headlineMedium),
+            const SizedBox(height: 6),
             Text('Your countries: ${([me.homeCountry, ...me.interests]).join(', ')}', style: t.bodySmall),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             TextField(
               controller: _search,
               decoration: InputDecoration(
@@ -258,50 +273,112 @@ class _Notification extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final n = risk.surveyItems.length;
+    final p = risk.probabilityIdx;
     return Reveal(
-      child: Card(
-        margin: EdgeInsets.zero,
-        color: cs.primary.withAlpha(22),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: cs.primary.withAlpha(120))),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
+      child: InkPanel(
+        stripe: p == null ? null : scaleColors[p],
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+        child: Builder(builder: (context) {
+          final cs = Theme.of(context).colorScheme;
+          return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  Icon(Icons.notifications_active_outlined, color: cs.primary),
+                  _Pulse(color: youColor(context)),
                   const SizedBox(width: 8),
-                  Expanded(child: Text('ACAPS updated a risk · now', style: t.labelMedium)),
-                  Text('${risk.id} · ${risk.country}', style: t.labelSmall),
+                  Expanded(child: Text('ACAPS UPDATED A RISK · NOW', style: mono(11, weight: FontWeight.w700, color: cs.onSurface, spacing: 1.2))),
                 ],
               ),
-              const SizedBox(height: 10),
-              Text(risk.title, maxLines: 4, overflow: TextOverflow.ellipsis, style: t.titleMedium),
-              const SizedBox(height: 6),
-              Text('Got 2 minutes? ${n + 1} short screens: ${n == 1 ? 'the risk' : '$n triggers'}, then one forecast.',
-                  style: t.bodyMedium),
               const SizedBox(height: 12),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  TextButton(onPressed: () => notNow(context, risk), child: const Text('Not now')),
+                  Expanded(child: IsoCode(risk, size: 30, color: cs.onSurface)),
+                  Text(risk.id, style: mono(13, weight: FontWeight.w700, color: cs.onSurfaceVariant)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(risk.title, maxLines: 4, overflow: TextOverflow.ellipsis, style: t.titleMedium?.copyWith(color: cs.onSurface, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              Text('Got 2 minutes? ${n + 1} short screens: ${n == 1 ? 'the risk' : '$n triggers'}, then one forecast.',
+                  style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  TextButton(
+                    style: TextButton.styleFrom(foregroundColor: cs.onSurface, padding: EdgeInsets.zero),
+                    onPressed: () => notNow(context, risk),
+                    child: Text('Not now', style: TextStyle(decorationColor: cs.onSurface)),
+                  ),
                   const Spacer(),
                   FilledButton(
-                    style: FilledButton.styleFrom(minimumSize: const Size(120, 44)),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(140, 50),
+                      backgroundColor: cs.onSurface,
+                      foregroundColor: cs.surface,
+                    ),
                     onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SurveyScreen(risk: risk))),
-                    child: const Text('Open'),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [Text('Open'), SizedBox(width: 10), Icon(Icons.arrow_forward, size: 20)],
+                    ),
                   ),
                 ],
               ),
             ],
-          ),
-        ),
+          );
+        }),
       ),
     );
   }
+}
+
+/// A live dot that breathes, like a status light.
+class _Pulse extends StatefulWidget {
+  final Color color;
+  const _Pulse({required this.color});
+
+  @override
+  State<_Pulse> createState() => _PulseState();
+}
+
+class _PulseState extends State<_Pulse> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400));
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // A few breaths when the banner appears, then still: draws the eye
+    // without moving forever. None when the system asks for less motion.
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+      _c.stop();
+    } else if (!_c.isAnimating && _c.value == 0) {
+      _c.repeat(reverse: true, count: 4);
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: _c,
+        builder: (context, _) => Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: widget.color,
+            boxShadow: [BoxShadow(color: widget.color.withAlpha((120 * (1 - _c.value)).round()), spreadRadius: 6 * _c.value)],
+          ),
+        ),
+      );
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +455,6 @@ class _TrackRecord extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
     final st = appState.statsOf(me);
     final scores = [for (final x in responses) appState.scoreOf(x)].whereType<ForecastScore>().toList();
     // ACAPS scored on exactly the risks I forecast: a fair bar to beat.
@@ -400,49 +476,71 @@ class _TrackRecord extends StatelessWidget {
       status = rank == null ? 'Ranked by accuracy once your forecasts mature.' : '#${rank.rank} of ${rank.of} by accuracy. The top 3 are Super estimators.';
     }
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        child: Column(
+    // The track record is the one inverted block on this screen.
+    return InkPanel(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+      child: Builder(builder: (context) {
+        final ics = Theme.of(context).colorScheme;
+        final rule = Divider(height: 28, color: ics.onSurface.withAlpha(60));
+        return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Forecasting', style: t.labelLarge),
-            const SizedBox(height: 8),
+            Eyebrow('FORECASTING', color: ics.onSurface),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  st.brier == null ? '—' : '${accuracyPct(st.brier!)}%',
+                  style: mono(54, weight: FontWeight.w700, color: ics.onSurface, spacing: -2),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('accuracy', style: t.bodyMedium?.copyWith(color: ics.onSurface, fontWeight: FontWeight.w700)),
+                        if (st.brier != null && acaps != null) _VsAcaps(mine: st.brier!, acaps: acaps, risks: scores.length),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _Stat(value: '${responses.length}', label: 'forecasts'),
                 _Stat(value: '${st.resolved}', label: 'matured'),
-                _Stat(
-                  value: st.brier == null ? '-' : '${accuracyPct(st.brier!)}%',
-                  label: 'accuracy',
-                  note: st.brier == null || acaps == null ? null : _VsAcaps(mine: st.brier!, acaps: acaps, risks: scores.length),
-                ),
                 _Stat(value: '${st.points}', label: 'total points'),
               ],
             ),
-            const Divider(height: 24),
-            Text('Your comments', style: t.labelLarge),
-            const SizedBox(height: 8),
+            rule,
+            Eyebrow('YOUR COMMENTS', color: ics.onSurface),
+            const SizedBox(height: 10),
             Row(
               children: [
                 _Stat(value: '$useful', label: 'marked useful'),
                 _Stat(value: '$used', label: 'used in analysis'),
+                const Spacer(),
               ],
             ),
-            const Divider(height: 24),
+            rule,
             Row(
               children: [
-                if (superEstimator) ...[const AwardIcon(Award.superEstimator, size: 26), const SizedBox(width: 10)] else ...[
-                  Icon(Icons.track_changes, size: 22, color: cs.primary),
+                if (superEstimator) ...[const AwardIcon(Award.superEstimator, size: 28), const SizedBox(width: 10)] else ...[
+                  Icon(Icons.track_changes, size: 22, color: ics.onSurface),
                   const SizedBox(width: 10),
                 ],
-                Expanded(child: Text(status, style: t.bodyMedium)),
+                Expanded(child: Text(status, style: t.bodyMedium?.copyWith(color: ics.onSurface))),
               ],
             ),
           ],
-        ),
-      ),
+        );
+      }),
     );
   }
 }
@@ -469,7 +567,7 @@ class _MyRiskCard extends StatelessWidget {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: InkWell(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.zero,
           onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SurveyScreen(risk: r, start: SurveyStart.summary))),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -525,7 +623,7 @@ class _MyRiskCard extends StatelessWidget {
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
-                            'Your check-ins: ${resp.history.map((c) => '${levelLabels[c.forecast - 1]} (${formatDate(c.at)})').join(' → ')}',
+                            'Your check-ins: ${resp.history.map((c) => '${levelLabels[c.forecast - 1]} (${formatDate(c.at)})').join(', then ')}',
                             style: t.bodySmall,
                           ),
                         ),
@@ -596,7 +694,7 @@ class _MyComment extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(top: 10),
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(150), borderRadius: BorderRadius.circular(12)),
+      decoration: BoxDecoration(color: cs.surfaceContainerLowest, border: Border(left: BorderSide(color: cs.onSurface, width: 3))),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -632,20 +730,17 @@ class _MyComment extends StatelessWidget {
 class _Stat extends StatelessWidget {
   final String value;
   final String label;
-
-  /// Extra line under the label (e.g. the comparison with ACAPS).
-  final Widget? note;
-  const _Stat({required this.value, required this.label, this.note});
+  const _Stat({required this.value, required this.label});
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Expanded(
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(value, style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 2),
-          Text(label, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
-          if (note != null) ...[const SizedBox(height: 3), note!],
+          Text(value, style: mono(24, weight: FontWeight.w700, color: cs.onSurface, spacing: -0.5)),
+          Text(label, style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant, height: 1.2)),
         ],
       ),
     );
@@ -673,7 +768,12 @@ class _VsAcaps extends StatelessWidget {
       message: 'ACAPS\'s own ratings on the same $risks ${risks == 1 ? 'risk' : 'risks'}, scored the same way, '
           'reached ${accuracyPct(acaps)}%.',
       triggerMode: TooltipTriggerMode.tap,
-      child: Text(text, textAlign: TextAlign.center, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: color)),
+      child: Container(
+        margin: const EdgeInsets.only(top: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        color: diff == 0 ? Colors.transparent : color,
+        child: Text(text, style: mono(12, weight: FontWeight.w700, color: diff == 0 ? cs.onSurface : Colors.white, spacing: 0.3)),
+      ),
     );
   }
 }
@@ -748,9 +848,9 @@ class _RatingTabState extends State<RatingTab> {
               child: SegmentedButton<RatingScope>(
                 showSelectedIcon: false,
                 segments: [
-                  ButtonSegment(value: RatingScope.country, label: Text(me == null ? 'Country' : 'My country'), icon: const Icon(Icons.place_outlined)),
-                  ButtonSegment(value: RatingScope.region, label: Text(me == null ? 'Region' : 'My region'), icon: const Icon(Icons.map_outlined)),
-                  const ButtonSegment(value: RatingScope.all, label: Text('All'), icon: Icon(Icons.public)),
+                  ButtonSegment(value: RatingScope.country, label: Text(me == null ? 'Country' : 'My country')),
+                  ButtonSegment(value: RatingScope.region, label: Text(me == null ? 'Region' : 'My region')),
+                  const ButtonSegment(value: RatingScope.all, label: Text('All')),
                 ],
                 selected: {_scope},
                 onSelectionChanged: (v) => setState(() => _scope = v.first),
@@ -843,20 +943,19 @@ class _Benchmark extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: cs.outline, width: 1.5, style: BorderStyle.solid),
-        color: cs.surfaceContainerHighest.withAlpha(110),
+        border: Border.all(color: cs.onSurface, width: 2.5),
+        color: cs.surfaceContainerLowest,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.flag_circle_outlined, color: cs.primary),
-              const SizedBox(width: 8),
-              Expanded(child: Text('Bar to beat: ACAPS itself', style: t.titleSmall)),
+              const AcapsMark(size: 14),
+              const SizedBox(width: 10),
+              Expanded(child: Text('Bar to beat: ACAPS itself', style: t.titleSmall?.copyWith(fontWeight: FontWeight.w800))),
               Text(row.brier == null ? '-' : '${accuracyPct(row.brier!)}%',
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                  style: mono(26, weight: FontWeight.w700, color: cs.onSurface, spacing: -0.5)),
             ],
           ),
           const SizedBox(height: 6),
@@ -933,9 +1032,8 @@ class _PointsRow extends StatelessWidget {
       );
 }
 
-/// Gold, silver, bronze.
-const _podium = [Color(0xFFE0A800), Color(0xFF9AA4AE), Color(0xFFB8733A)];
-
+/// One row of the rating: a big mono rank, the person as a dot, accuracy and
+/// points. The top three are solid ink rows; you get a blue bar.
 class _RatingTile extends StatelessWidget {
   final int rank;
   final String name;
@@ -946,38 +1044,30 @@ class _RatingTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    final podium = rank <= 3 ? _podium[rank - 1] : null;
-    final bg = podium != null ? podium.withAlpha(48) : (isMe ? cs.primary.withAlpha(26) : cs.surfaceContainerLowest);
-    final border = podium ?? (isMe ? cs.primary : cs.outlineVariant);
+    final top = rank <= 3;
+    final fg = top ? cs.surface : cs.onSurface;
+    final soft = top ? cs.surface.withAlpha(190) : cs.onSurfaceVariant;
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: podium != null ? 14 : 10),
+      margin: const EdgeInsets.symmetric(vertical: 3),
       decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: border, width: podium != null || isMe ? 2 : 1),
+        color: top ? cs.onSurface : cs.surfaceContainerLowest,
+        border: isMe ? Border(left: BorderSide(color: youColor(context), width: 6)) : null,
       ),
+      padding: EdgeInsets.fromLTRB(isMe ? 8 : 12, top ? 14 : 10, 12, top ? 14 : 10),
       child: Row(
         children: [
           SizedBox(
-            width: 36,
-            child: podium != null
-                ? Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Icon(Icons.emoji_events, color: podium, size: 34),
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Text('$rank', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.white)),
-                      ),
-                    ],
-                  )
-                : Text('$rank', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurfaceVariant)),
+            width: 42,
+            child: Text(rank.toString().padLeft(2, '0'), style: mono(top ? 24 : 18, weight: FontWeight.w700, color: fg, spacing: -0.5)),
           ),
-          const SizedBox(width: 8),
-          Avatar(name, size: podium != null ? 36 : 30),
+          // On an ink row the dot inverts, so it stays visible.
+          Theme(
+            data: top && !isMe
+                ? Theme.of(context).copyWith(colorScheme: cs.copyWith(onSurface: cs.surface, surface: cs.onSurface))
+                : Theme.of(context),
+            child: Avatar(name, size: top ? 30 : 26, ring: isMe),
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -985,14 +1075,14 @@ class _RatingTile extends StatelessWidget {
               children: [
                 Text(isMe ? '$name (you)' : name,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontWeight: podium != null || isMe ? FontWeight.w800 : FontWeight.w600, fontSize: podium != null ? 15.5 : 14)),
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: top ? 16 : 14.5, color: fg)),
                 Text(
                   row.brier == null ? 'No matured forecasts yet' : 'Accuracy ${accuracyPct(row.brier!)}% · ${row.resolved} matured',
-                  style: t.bodySmall,
+                  style: TextStyle(fontSize: 12.5, color: soft),
                 ),
                 if (row.badges.isNotEmpty)
                   Padding(
-                    padding: const EdgeInsets.only(top: 4),
+                    padding: const EdgeInsets.only(top: 5),
                     child: Wrap(spacing: 4, children: [for (final b in row.badges) AwardIcon(b, size: 20)]),
                   ),
               ],
@@ -1002,8 +1092,8 @@ class _RatingTile extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text('${row.points}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: podium != null ? 20 : 16)),
-              Text('points', style: t.bodySmall),
+              Text('${row.points}', style: mono(top ? 22 : 17, weight: FontWeight.w700, color: fg, spacing: -0.5)),
+              Text('points', style: TextStyle(fontSize: 12, color: soft)),
             ],
           ),
         ],
@@ -1012,6 +1102,7 @@ class _RatingTile extends StatelessWidget {
   }
 }
 
+/// A badge: its icon in a square in the badge's colour.
 class AwardIcon extends StatelessWidget {
   final Award badge;
   final double size;
@@ -1020,18 +1111,18 @@ class AwardIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (icon, color) = switch (badge) {
-      Award.superEstimator => (Icons.track_changes, const Color(0xFFD9A441)),
-      Award.usefulInsight => (Icons.lightbulb_outline, const Color(0xFF6E9E72)),
-      Award.cited => (Icons.push_pin_outlined, const Color(0xFF2E7DAF)),
-      Award.regular => (Icons.repeat, const Color(0xFF8A6FB0)),
+      Award.superEstimator => (Icons.track_changes, scaleColors[1]),
+      Award.usefulInsight => (Icons.lightbulb_outline, const Color(0xFF2F7A57)),
+      Award.cited => (Icons.push_pin_outlined, AppColors.you),
+      Award.regular => (Icons.repeat, const Color(0xFF8A8D88)),
     };
     return Tooltip(
       message: badge.label,
       child: Container(
         width: size,
         height: size,
-        decoration: BoxDecoration(color: color.withAlpha(40), shape: BoxShape.circle),
-        child: Icon(icon, size: size * 0.6, color: color),
+        color: color,
+        child: Icon(icon, size: size * 0.62, color: badge == Award.superEstimator ? AppColors.ink : Colors.white),
       ),
     );
   }
