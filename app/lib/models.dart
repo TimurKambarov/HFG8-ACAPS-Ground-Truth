@@ -84,6 +84,9 @@ class Risk {
   final String title;
   final String type;
   final String country;
+
+  /// ISO 3166-1 alpha-3 code(s), as in the Risk Radar export (e.g. "TCD").
+  final String iso;
   final String rationale;
   final int? probabilityIdx;
   final int? impact;
@@ -104,6 +107,7 @@ class Risk {
     required this.title,
     required this.type,
     required this.country,
+    this.iso = '',
     required this.rationale,
     required this.probabilityIdx,
     required this.impact,
@@ -126,6 +130,7 @@ class Risk {
       title: f('Risk Title'),
       type: f('Risk Type'),
       country: f('Country'),
+      iso: f('ISO'),
       rationale: stripMarkdownLinks(f('Rationale')),
       probabilityIdx: parseLevel5(f('Probability')),
       impact: int.tryParse(f('Impact')),
@@ -144,6 +149,7 @@ class Risk {
         'title': title,
         'type': type,
         'country': country,
+        'iso': iso,
         'rationale': rationale,
         'probability': probabilityIdx,
         'impact': impact,
@@ -164,6 +170,7 @@ class Risk {
         title: m['title'] as String,
         type: (m['type'] as String?) ?? '',
         country: m['country'] as String,
+        iso: (m['iso'] as String?) ?? '',
         rationale: (m['rationale'] as String?) ?? '',
         probabilityIdx: (m['probability'] as num?)?.toInt(),
         impact: (m['impact'] as num?)?.toInt(),
@@ -183,6 +190,11 @@ class Risk {
   bool get materialised => status.toLowerCase() == 'materialised';
   bool get isResolved =>
       materialised || status.toLowerCase() == 'not materialised';
+
+  /// Imported from ACAPS's earlier risk list (IDs below R1000). The brief
+  /// warns these "resolve over much longer periods than recent ones", so
+  /// their scores are not true 6-month forecasts: labelled as indicative.
+  bool get fromEarlierList => !custom && (int.tryParse(id.replaceAll(RegExp('[^0-9]'), '')) ?? 1000) < 1000;
 
   bool inCountry(String c) =>
       country.split(',').map((s) => s.trim()).contains(c);
@@ -254,18 +266,41 @@ class GroupView {
   /// Middle half of answers (interquartile range), as scale steps.
   final int low, high;
 
-  const GroupView._(this.n, this.median, this.low, this.high);
+  /// Share of answers on the median step (0..1); 0 when the median is
+  /// halfway between two steps.
+  final double share;
+
+  const GroupView._(this.n, this.median, this.low, this.high, this.share);
 
   static GroupView? of(Iterable<int> answers) {
     final xs = answers.toList()..sort();
     if (xs.isEmpty) return null;
     final n = xs.length;
     final median = n.isOdd ? xs[n ~/ 2].toDouble() : (xs[n ~/ 2 - 1] + xs[n ~/ 2]) / 2;
-    return GroupView._(n, median, xs[((n - 1) * 0.25).round()], xs[((n - 1) * 0.75).round()]);
+    final share = xs.where((x) => x == median).length / n;
+    return GroupView._(n, median, xs[((n - 1) * 0.25).round()], xs[((n - 1) * 0.75).round()], share);
   }
 
   /// True when the median is a step on the scale (not halfway between two).
   bool get onStep => median == median.roundToDouble();
+
+  /// The middle half of answers spans two or more steps: no trustworthy group
+  /// answer. ACAPS's example: 1, 1, 5, 5 has a "medium" average but means
+  /// nobody agrees. A split is information too: this part needs attention.
+  bool get split => high - low >= 2;
+
+  /// Short form for trends: "High", "Medium–High", or "split".
+  String get short => split
+      ? 'split'
+      : onStep
+          ? levelLabels[median.round() - 1]
+          : '${levelLabels[median.floor() - 1]}–${levelLabels[median.ceil() - 1]}';
+
+  /// Headline for a forecast: the group answer, or "opinions split".
+  String get probabilityHeadline => split ? 'No clear group view: opinions split' : 'Group: $probability';
+
+  /// Headline for "how bad": the group answer, or "opinions split".
+  String get severityHeadline => split ? 'No clear group view: opinions split' : 'Group: $severity';
 
   /// "High (67–90%)", or "between Medium and High".
   String get probability => onStep
@@ -277,12 +312,15 @@ class GroupView {
       ? '${median.round()} of 5 (${severityLabels[median.round() - 1]})'
       : 'between ${median.floor()} and ${median.ceil()} of 5';
 
-  /// How far experts agree, in words.
-  String spread(List<String> words) => high - low == 0
-      ? 'Experts agree: most said ${words[low - 1]}'
-      : high - low == 1
-          ? 'Most experts between ${words[low - 1]} and ${words[high - 1]}'
-          : 'Opinions split: most experts between ${words[low - 1]} and ${words[high - 1]}';
+  /// How far experts agree, in words. "Experts agree" only when nearly all
+  /// (at least 3 in 4) gave the same answer.
+  String spread(List<String> words) {
+    if (split) return 'Opinions split: answers range from ${words[low - 1]} to ${words[high - 1]}';
+    if (high == low) {
+      return share >= 0.75 ? 'Experts agree: nearly all said ${words[low - 1]}' : 'Most experts said ${words[low - 1]}';
+    }
+    return 'Most experts between ${words[low - 1]} and ${words[high - 1]}';
+  }
 }
 
 /// Ground-truthing answers on one trigger screen. Not scored: whether a
@@ -317,26 +355,127 @@ extension CreditText on Credit {
       };
 }
 
+/// A single-use invite link: one per person, works once. Trust is checked
+/// at the door (ACAPS knows whom it invited); inside, the expert chooses
+/// their anonymity. So an invite records THAT it was used, never by which
+/// account: otherwise a fully anonymous expert could be traced through it.
+class Invite {
+  final String code;
+
+  /// Optional suggestion for the new expert's country (the demo invites have
+  /// one); the expert chooses their countries when creating their profile.
+  final String? country;
+
+  /// Moderator who created it.
+  final String createdBy;
+  final DateTime createdAt;
+
+  /// Who it is for, so moderators can follow up. Moderators only.
+  String note;
+  DateTime? usedAt;
+  bool revoked;
+
+  Invite({
+    required this.code,
+    this.country,
+    required this.createdBy,
+    required this.createdAt,
+    this.note = '',
+    this.usedAt,
+    this.revoked = false,
+  });
+
+  bool get used => usedAt != null;
+  bool get open => !used && !revoked;
+
+  Map<String, dynamic> toJson() => {
+        'code': code,
+        if (country != null) 'country': country,
+        'created_by': createdBy,
+        'created_at': createdAt.toIso8601String(),
+        'note': note,
+        if (usedAt != null) 'used_at': usedAt!.toIso8601String(),
+        'revoked': revoked,
+      };
+
+  factory Invite.fromJson(Map<String, dynamic> m) => Invite(
+        code: m['code'] as String,
+        country: m['country'] as String?,
+        createdBy: m['created_by'] as String,
+        createdAt: DateTime.parse(m['created_at'] as String),
+        note: (m['note'] as String?) ?? '',
+        usedAt: m['used_at'] == null ? null : DateTime.parse(m['used_at'] as String),
+        revoked: m['revoked'] == true,
+      );
+}
+
+/// Result of opening an invite link.
+enum InviteStatus { ok, unknown, used, revoked }
+
+/// Someone joined through an expert's referral link. The joined account is
+/// kept so the inviter can follow the colleague's progress (how many risks
+/// answered) and, in the pilot, earn points after 3 answered risks. The
+/// inviter only ever sees the stage: never the name, pseudonym, answers or
+/// comments. New members are told this when they join.
+class Referral {
+  final String referrerId;
+  final DateTime joinedAt;
+
+  /// The account that joined (null for referrals saved before stages existed).
+  final String? referredId;
+  const Referral(this.referrerId, this.joinedAt, [this.referredId]);
+
+  Map<String, dynamic> toJson() => {
+        'referrer': referrerId,
+        'at': joinedAt.toIso8601String(),
+        if (referredId != null) 'referred': referredId,
+      };
+
+  factory Referral.fromJson(Map<String, dynamic> m) =>
+      Referral(m['referrer'] as String, DateTime.parse(m['at'] as String), m['referred'] as String?);
+}
+
+/// How far a referred colleague has got.
+enum ReferralStage { joined, firstRisk, threeRisks }
+
+/// One dated forecast. Every time an expert answers (or changes their answer)
+/// a check-in is added; none is ever overwritten, so ACAPS sees how the view
+/// moves over time ("from a snapshot to a live picture").
+class CheckIn {
+  final int forecast;
+  final DateTime at;
+  const CheckIn(this.forecast, this.at);
+
+  Map<String, dynamic> toJson() => {'forecast': forecast, 'at': at.toIso8601String()};
+
+  factory CheckIn.fromJson(Map<String, dynamic> m) =>
+      CheckIn((m['forecast'] as num).toInt(), DateTime.parse(m['at'] as String));
+}
+
 /// One expert's answers to one risk: ground truthing per trigger, plus one
-/// forecast for the whole risk.
+/// forecast for the whole risk, with every earlier check-in kept.
 class Response {
   final String expertId;
   final String riskId;
 
-  /// Per trigger: agree, how bad, what's missing (not scored).
+  /// Per trigger: agree, how bad, what's missing (not scored). Latest answer.
   final Map<String, ItemAnswer> items;
 
   /// "Will this risk materialise within 6 months?" on the ACAPS scale 1..5.
-  /// The only scored answer.
+  /// The only scored answer: the latest check-in.
   final int? forecast;
   final DateTime answeredAt;
   final DateTime? editedAt;
   final bool simulated;
 
-  /// Chosen for this risk; null = the default from the expert's profile.
+  /// Every forecast this expert gave on this risk, oldest first; the last
+  /// one is [forecast].
+  final List<CheckIn> history;
+
+  /// Chosen for this risk; null = the default (anonymous).
   final Credit? credit;
 
-  const Response({
+  Response({
     required this.expertId,
     required this.riskId,
     required this.items,
@@ -345,16 +484,22 @@ class Response {
     this.editedAt,
     this.simulated = false,
     this.credit,
-  });
+    List<CheckIn>? history,
+  }) : history = history ?? (forecast == null ? const [] : [CheckIn(forecast, editedAt ?? answeredAt)]);
 
   /// End of the 6-month window the forecast is about.
   DateTime get resolvesBy => answeredAt.add(forecastHorizon);
+
+  /// The forecast this expert had given by [t] (their latest check-in on or
+  /// before it), or null if they had not answered yet.
+  int? forecastAt(DateTime t) => history.where((c) => !c.at.isAfter(t)).lastOrNull?.forecast;
 
   Map<String, dynamic> toJson() => {
         'expert': expertId,
         'risk': riskId,
         'items': {for (final e in items.entries) e.key: e.value.toJson()},
         if (forecast != null) 'forecast': forecast,
+        'history': [for (final c in history) c.toJson()],
         'at': answeredAt.toIso8601String(),
         if (editedAt != null) 'edited': editedAt!.toIso8601String(),
         if (credit != null) 'credit': credit!.name,
@@ -376,6 +521,10 @@ class Response {
       answeredAt: DateTime.parse(m['at'] as String),
       editedAt: m['edited'] == null ? null : DateTime.parse(m['edited'] as String),
       credit: Credit.values.where((c) => c.name == m['credit']).firstOrNull,
+      // Saved before check-ins were kept: the one answer becomes the history.
+      history: m['history'] == null
+          ? null
+          : [for (final c in m['history'] as List) CheckIn.fromJson((c as Map).cast<String, dynamic>())],
     );
   }
 }

@@ -126,6 +126,19 @@ class InboxTab extends StatefulWidget {
 class _InboxTabState extends State<InboxTab> {
   bool _allArchive = false;
   bool _archiveMineOnly = false;
+  final _search = TextEditingController();
+  String _q = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Same matching as the moderator's risk search: ID (or just its number),
+  /// title or country.
+  bool _matches(Risk r) =>
+      _q.isEmpty || '${r.id} ${r.title} ${r.oneLiner} ${r.country}'.toLowerCase().contains(_q.toLowerCase());
 
   @override
   Widget build(BuildContext context) {
@@ -135,12 +148,14 @@ class _InboxTabState extends State<InboxTab> {
       builder: (context, _) {
         final me = appState.me;
         if (me == null) return const SizedBox();
-        final note = appState.pendingNotification;
-        final active = appState.activeForMe();
-        final allClosed = appState.archiveForMe();
+        final searching = _q.trim().isNotEmpty;
+        final note = searching ? null : appState.pendingNotification;
+        final active = appState.activeForMe().where(_matches).toList();
+        final allClosed = appState.archiveForMe().where(_matches).toList();
         final mineClosed = allClosed.where((r) => appState.relevantTo(me, r)).toList();
         final archive = _archiveMineOnly ? mineClosed : allClosed;
-        final shownArchive = _allArchive ? archive : archive.take(5);
+        // While searching, show every match.
+        final shownArchive = _allArchive || searching ? archive : archive.take(5);
 
         return ListView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -148,6 +163,32 @@ class _InboxTabState extends State<InboxTab> {
             Text('Hi, ${displayName(me, appState.viewer)}', style: t.headlineSmall),
             const SizedBox(height: 4),
             Text('Your countries: ${([me.homeCountry, ...me.interests]).join(', ')}', style: t.bodySmall),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _search,
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search),
+                hintText: 'Search ID, title or country',
+                isDense: true,
+                suffixIcon: searching
+                    ? IconButton(
+                        tooltip: 'Clear search',
+                        icon: const Icon(Icons.close),
+                        onPressed: () => setState(() {
+                          _search.clear();
+                          _q = '';
+                        }),
+                      )
+                    : null,
+              ),
+              onChanged: (v) => setState(() => _q = v),
+            ),
+            if (searching && active.isEmpty && allClosed.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 16),
+                child: Text('No risks match "${_q.trim()}". Try a risk number (e.g. 1043), a word from the title, or a country.',
+                    style: t.bodyMedium),
+              ),
             // Slides away after "Not now", so it is obvious the tap worked.
             AnimatedSize(
               duration: const Duration(milliseconds: 280),
@@ -164,9 +205,11 @@ class _InboxTabState extends State<InboxTab> {
                       ),
               ),
             ),
-            SectionLabel('Active risks in your countries · ${active.length}'),
-            if (active.isEmpty) Text('No active risks right now.', style: t.bodySmall),
-            for (final r in active) RiskTile(risk: r),
+            if (!searching || active.isNotEmpty) ...[
+              SectionLabel('Active risks in your countries · ${active.length}'),
+              if (active.isEmpty) Text('No active risks right now.', style: t.bodySmall),
+              for (final r in active) RiskTile(risk: r),
+            ],
             if (allClosed.isNotEmpty) ...[
               SectionLabel('Archive · see what happened · ${allClosed.length}'),
               Text('Every risk that has closed, including ones from before you joined. '
@@ -192,7 +235,7 @@ class _InboxTabState extends State<InboxTab> {
                   risk: r,
                   trailing: appState.responseOf(me, r) == null ? 'See what happened' : 'Your forecast · see what happened',
                 ),
-              if (archive.length > 5)
+              if (archive.length > 5 && !searching)
                 Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton(
@@ -471,6 +514,24 @@ class _MyRiskCard extends StatelessWidget {
                       style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
                     ),
                   ),
+                // Every earlier check-in is kept: my own view over time.
+                if (resp.history.length > 1)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.timeline, size: 16, color: cs.onSurfaceVariant),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Your check-ins: ${resp.history.map((c) => '${levelLabels[c.forecast - 1]} (${formatDate(c.at)})').join(' → ')}',
+                            style: t.bodySmall,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 // My ground-truthing answers, in the survey's own words.
                 for (final it in items)
                   if (resp.items[it.id] case final a?)
@@ -735,11 +796,22 @@ class _RatingTabState extends State<RatingTab> {
                   isMe: people[i].expert!.id == me?.id,
                 ),
             const SizedBox(height: 8),
-            _Benchmark(row: acaps, scopeName: _scopeName),
+            _Benchmark(
+              row: acaps,
+              scopeName: _scopeName,
+              earlier: appState.risks
+                  .where((r) => r.isResolved && r.acapsLikelihood != null && r.fromEarlierList && _riskMatches(r))
+                  .length,
+            ),
             const SectionLabel('How you earn points'),
             _PointsRow(icon: Icons.track_changes, text: 'Matured forecast: up to 100 points, equal to your accuracy'),
             _PointsRow(icon: Icons.lightbulb_outline, text: '+${Points.usefulComment}: a moderator marks your comment as useful'),
             _PointsRow(icon: Icons.push_pin_outlined, text: '+${Points.usedComment}: your comment is used in the analysis of another risk'),
+            _PointsRow(
+              icon: Icons.group_add_outlined,
+              text: '+${Points.referral}: a colleague joins with your referral link (Profile). '
+                  'Demo: when they register. Pilot: once they have answered ${Points.referralAnswersInPilot} risks.',
+            ),
             const SectionLabel('Badges'),
             for (final b in Award.values)
               ListTile(
@@ -759,7 +831,10 @@ class _RatingTabState extends State<RatingTab> {
 class _Benchmark extends StatelessWidget {
   final RatingRow row;
   final String scopeName;
-  const _Benchmark({required this.row, required this.scopeName});
+
+  /// How many of those risks come from ACAPS's earlier list (longer time frames).
+  final int earlier;
+  const _Benchmark({required this.row, required this.scopeName, this.earlier = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -789,8 +864,10 @@ class _Benchmark extends StatelessWidget {
             row.brier == null
                 ? 'No resolved ACAPS risks in $scopeName yet, so there is nothing to compare with here.'
                 : 'For each of the ${row.resolved} resolved risks in $scopeName, ACAPS published a probability '
-                    '(e.g. "High" ≈ 70%). We score those ratings exactly like yours. '
-                    'If your accuracy is higher, your forecasts beat the published analysis.',
+                    '(e.g. "High" = 67–90%). We score those ratings exactly like yours. '
+                    'If your accuracy is higher, your forecasts beat the published analysis.'
+                    '${earlier == 0 ? '' : ' $earlier of these risks come from ACAPS\'s earlier risk list and resolved '
+                        'over longer than 6 months, so treat this benchmark as indicative.'}',
             style: t.bodySmall,
           ),
           Align(
@@ -828,7 +905,10 @@ void showScoringHelp(BuildContext context) => showDialog<void>(
             'Only the forecast is scored. Your answers per trigger (agree, how bad, '
             'what is missing) help ACAPS but are not scored.\n\n'
             'Bar to beat: ACAPS rates every risk on the same scale. We score those '
-            'ratings against what happened, the same way, as a benchmark.',
+            'ratings against what happened, the same way, as a benchmark.\n\n'
+            'Older risks (from ACAPS\'s earlier risk list) often took longer than 6 months to '
+            'resolve. They are marked, and their scores are indicative. Every new forecast '
+            'you make has a true 6-month window.',
           ),
         ),
         actions: [FilledButton(onPressed: () => Navigator.pop(c), child: const Text('Got it'))],

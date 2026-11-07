@@ -11,22 +11,22 @@ import 'models.dart';
 
 export 'identity.dart';
 
-/// Demo invite codes, as printed on the QR codes ACAPS hands out.
-const inviteCodes = {'GT-CHAD-7Q4X': 'Chad', 'GT-SDN-3K9M': 'Sudan'};
-
-/// Invite code for a country panel: the printed demo code if there is one,
-/// otherwise a stable generated one (same country, same code).
-String inviteCodeFor(String country) {
-  final printed = inviteCodes.entries.where((e) => e.value == country).firstOrNull?.key;
-  if (printed != null) return printed;
-  final letters = country.toUpperCase().replaceAll(RegExp('[^A-Z]'), '');
+/// A new random invite code, e.g. "GT-7Q4X-K9MB" (no 0/O/1/I to misread).
+/// Referral links use the prefix "REF".
+String newInviteCode([Random? rnd, String prefix = 'GT']) {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  var h = 7;
-  for (final u in country.codeUnits) {
-    h = (h * 31 + u) & 0x7fffffff;
-  }
-  final tail = List.generate(4, (i) => alphabet[(h >> (i * 5)) % alphabet.length]).join();
-  return 'GT-${letters.substring(0, min(4, letters.length))}-$tail';
+  final r = rnd ?? Random.secure();
+  String part() => List.generate(4, (_) => alphabet[r.nextInt(alphabet.length)]).join();
+  return '$prefix-${part()}-${part()}';
+}
+
+/// The link a token opens: this app with ?invite=<token>. Used for the
+/// moderators' single-use invites and the experts' permanent referral links.
+/// Opening it is the authorisation to create a profile.
+String inviteLink(String code) {
+  final b = Uri.base;
+  return Uri(scheme: b.scheme, host: b.host, port: b.hasPort ? b.port : null, path: b.path, queryParameters: {'invite': code})
+      .toString();
 }
 
 /// Brier score of a forecast on the ACAPS scale (1..5): squared gap between
@@ -38,6 +38,11 @@ double brier(int forecast, bool happened) =>
 class Points {
   static const usefulComment = 25;
   static const usedComment = 50;
+
+  /// A colleague joined through your referral link. Demo: as soon as they
+  /// register. Pilot: once they have answered [referralAnswersInPilot] risks.
+  static const referral = 100;
+  static const referralAnswersInPilot = 3;
   static int forecast(double brier) => (100 * (1 - brier)).round();
 }
 
@@ -147,6 +152,14 @@ class RiskModStats {
   /// 0 = everyone agrees with ACAPS, 1 = everyone disagrees (partly counts half).
   final double disagreement;
 
+  /// The experts' forecasts among themselves (median and spread); null if none.
+  final GroupView? group;
+
+  /// How the group view moved over the last update cycle (median steps; +
+  /// = experts now see it as more likely), and how many experts changed.
+  final double moved;
+  final int changed;
+
   const RiskModStats({
     required this.panel,
     required this.answered,
@@ -155,7 +168,17 @@ class RiskModStats {
     required this.expertLikelihood,
     required this.acapsLikelihood,
     required this.disagreement,
+    this.group,
+    this.moved = 0,
+    this.changed = 0,
   });
+
+  /// Experts disagree among themselves: no trustworthy group answer, so this
+  /// part of the analysis needs attention.
+  bool get split => group?.split ?? false;
+
+  /// How many steps the middle half of forecasts spans (0 = all the same).
+  int get spreadWidth => group == null ? -1 : group!.high - group!.low;
 
   double get responseRate => panel == 0 ? 0 : answered / panel;
 
@@ -274,7 +297,47 @@ class AppState extends ChangeNotifier {
   }
 
   // ---- session (persisted) ----
+  /// Country suggested by the invite link that was opened (may be null).
   String? invitePanel;
+
+  /// The single-use invite this person opened; used up when they register.
+  String? pendingInviteCode;
+
+  /// Why the last invite link did not work (shown on the sign-in screen).
+  InviteStatus? inviteError;
+
+  /// "Log in" pressed on the start screen: existing members sign in without
+  /// an invite link. Not persisted.
+  bool showLogin = false;
+
+  /// A valid, unused invite link was opened: go straight to the profile form.
+  bool get canRegister {
+    final code = pendingInviteCode;
+    if (code == null) return false;
+    final i = inviteByCode(code);
+    return (i != null && i.open) || referrerByCode(code) != null;
+  }
+
+  /// The expert whose referral link was opened, if the pending link is one.
+  Expert? get pendingReferrer => pendingInviteCode == null ? null : referrerByCode(pendingInviteCode!);
+
+  /// The log-in screen: after "Log in", or when an opened link did not work
+  /// (it says why). The start screen shows "Register" and "Log in".
+  bool get atSignIn => showLogin || inviteError != null;
+
+  void openLogin() {
+    showLogin = true;
+    notifyListeners();
+  }
+
+  /// Back to the start screen.
+  void backToStart() {
+    showLogin = false;
+    invitePanel = null;
+    pendingInviteCode = null;
+    inviteError = null;
+    _changed();
+  }
   String? sessionExpertId;
   String? sessionModeratorId;
 
@@ -320,16 +383,153 @@ class AppState extends ChangeNotifier {
 
   bool get signedIn => sessionModerator || me != null;
 
-  /// Returns the panel country, or null if the code is not a valid invite.
-  String? redeemInvite(String code) {
+  // ---- single-use invites (persisted) ----
+  List<Invite> invites = [];
+
+  Invite? inviteByCode(String code) {
     final c = code.trim().toUpperCase();
-    final panel = inviteCodes[c] ?? countries.where((x) => inviteCodeFor(x) == c).firstOrNull;
-    if (panel != null) {
-      invitePanel = panel;
-      _changed();
-    }
-    return panel;
+    return invites.where((i) => i.code == c).firstOrNull;
   }
+
+  /// The invite token in a link (".../?invite=GT-7Q4X-K9MB"), or the text
+  /// itself when it is just the token.
+  static String inviteToken(String linkOrCode) {
+    final s = linkOrCode.trim();
+    final fromLink = RegExp(r'[?&]invite=([^&#\s]+)').firstMatch(s)?.group(1);
+    return Uri.decodeComponent(fromLink ?? s);
+  }
+
+  /// Opens an invite link (the app starts with ?invite=<token>). The link is
+  /// the authorisation: each works once, and is used up when the person
+  /// creates their profile. There is no field to paste links into: new
+  /// members only get in by opening the link they were sent.
+  InviteStatus redeemInvite(String linkOrCode) {
+    final token = inviteToken(linkOrCode);
+    // An expert's referral link: permanent, works for any number of colleagues.
+    if (referrerByCode(token) case final ref?) {
+      inviteError = null;
+      invitePanel = null;
+      pendingInviteCode = ref.referralCode;
+      _changed();
+      return InviteStatus.ok;
+    }
+    final i = inviteByCode(token);
+    final status = i == null
+        ? InviteStatus.unknown
+        : i.revoked
+            ? InviteStatus.revoked
+            : i.used
+                ? InviteStatus.used
+                : InviteStatus.ok;
+    inviteError = status == InviteStatus.ok ? null : status;
+    if (status == InviteStatus.ok) {
+      invitePanel = i!.country;
+      pendingInviteCode = i.code;
+    }
+    _changed();
+    return status;
+  }
+
+  // ---- referral links (persisted) ----
+  /// Who joined through whose referral link (never which account joined).
+  List<Referral> referrals = [];
+
+  Expert? referrerByCode(String code) {
+    final c = code.trim().toUpperCase();
+    if (c.isEmpty) return null;
+    return experts.where((e) => e.referralCode == c).firstOrNull;
+  }
+
+  /// Colleagues who joined through [e]'s referral link.
+  int referralsBy(Expert e) => referrals.where((r) => r.referrerId == e.id).length;
+
+  /// Progress of each colleague who joined through [e]'s link, oldest first:
+  /// only the number of risks answered and the stage, nothing else.
+  List<({int answered, ReferralStage stage})> referralProgress(Expert e) {
+    final mine = referrals.where((r) => r.referrerId == e.id).toList()..sort((a, b) => a.joinedAt.compareTo(b.joinedAt));
+    return [
+      for (final r in mine)
+        () {
+          final joined = r.referredId == null ? null : expertById(r.referredId!);
+          final n = joined == null ? 0 : responsesOf(joined).length;
+          return (
+            answered: n,
+            stage: n >= Points.referralAnswersInPilot
+                ? ReferralStage.threeRisks
+                : n >= 1
+                    ? ReferralStage.firstRisk
+                    : ReferralStage.joined,
+          );
+        }(),
+    ];
+  }
+
+  /// Every expert gets a permanent referral link. Called when experts are
+  /// created or loaded, never while a screen is being built.
+  /// Returns whether any code was new (then it must be saved: a referral
+  /// link is permanent and must never change).
+  bool _ensureReferralCodes([Random? rnd]) {
+    final missing = experts.where((e) => e.referralCode.isEmpty).toList();
+    for (final e in missing) {
+      String code;
+      do {
+        code = newInviteCode(rnd, 'REF');
+      } while (referrerByCode(code) != null);
+      e.referralCode = code;
+    }
+    return missing.isNotEmpty;
+  }
+
+  /// The invite link this device last opened (persisted), so reloading the
+  /// same link does not sign the new member out again.
+  String? lastOpenedInvite;
+
+  /// The app was opened with an invite link: whoever was signed in on this
+  /// device is signed out (a new person is joining), then the link is checked.
+  InviteStatus openInviteLink(String linkOrCode) {
+    lastOpenedInvite = linkOrCode;
+    sessionExpertId = null;
+    sessionModeratorId = null;
+    showLogin = false;
+    return redeemInvite(linkOrCode);
+  }
+
+  /// A moderator creates a new single-use link for one person. No country:
+  /// the new expert chooses theirs when creating their profile.
+  Invite createInvite({String note = '', String? country}) {
+    String code;
+    do {
+      code = newInviteCode();
+    } while (inviteByCode(code) != null);
+    final i = Invite(
+      code: code,
+      country: country,
+      createdBy: sessionModeratorId ?? moderators.first.id,
+      createdAt: DateTime.now(),
+      note: note.trim(),
+    );
+    invites.add(i);
+    _changed();
+    return i;
+  }
+
+  /// "Who is it for", moderators only.
+  void setInviteNote(Invite i, String note) {
+    i.note = note.trim();
+    _changed();
+  }
+
+  void revokeInvite(Invite i) {
+    i.revoked = true;
+    _changed();
+  }
+
+  /// All invite links, newest first.
+  List<Invite> get invitesNewestFirst => [...invites]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+  /// For the demo "Register" button: an open invite, Chad first.
+  Invite? get demoInvite =>
+      invites.where((i) => i.open && i.country == 'Chad').firstOrNull ?? invites.where((i) => i.open).firstOrNull;
 
   void signInAs(Expert e) {
     sessionExpertId = e.id;
@@ -343,9 +543,11 @@ class AppState extends ChangeNotifier {
     _changed();
   }
 
+  /// "Switch user": back to the log-in screen.
   void signOut() {
     sessionExpertId = null;
     sessionModeratorId = null;
+    showLogin = true;
     _changed();
   }
 
@@ -359,6 +561,14 @@ class AppState extends ChangeNotifier {
     required bool onRating,
     bool hideFromOtherCountries = false,
   }) {
+    // The link is the authorisation: no profile without a valid, unused
+    // moderator invite or a colleague's referral link (a real backend checks
+    // this on the server too).
+    final invite = pendingInviteCode == null ? null : inviteByCode(pendingInviteCode!);
+    final referrer = pendingReferrer;
+    if ((invite == null || !invite.open) && referrer == null) {
+      throw StateError('A new profile needs a valid invite or referral link.');
+    }
     final e = Expert(
       id: 'u${DateTime.now().millisecondsSinceEpoch}',
       realName: level.needsRealName ? realName?.trim() : null,
@@ -371,6 +581,18 @@ class AppState extends ChangeNotifier {
       hideFromOtherCountries: hideFromOtherCountries,
     );
     experts.add(e);
+    _ensureReferralCodes(); // the new member gets their own referral link
+    if (invite != null && invite.open) {
+      // A moderator's invite is now used up. It records only WHEN, never
+      // which account, so a fully anonymous expert cannot be traced through it.
+      invite.usedAt = DateTime.now();
+    } else if (referrer != null) {
+      // A colleague's referral link stays valid. The inviter earns
+      // Points.referral (demo: on registration) and can follow the new
+      // member's progress (stage only; they were told when joining).
+      referrals.add(Referral(referrer.id, DateTime.now(), e.id));
+    }
+    pendingInviteCode = null;
     signInAs(e);
     return e;
   }
@@ -386,6 +608,9 @@ class AppState extends ChangeNotifier {
   Future<void> resetDemo() async {
     await _prefs?.remove(_prefsKey);
     invitePanel = null;
+    pendingInviteCode = null;
+    inviteError = null;
+    showLogin = false;
     sessionExpertId = null;
     sessionModeratorId = null;
     _bannerDismissed.clear();
@@ -503,14 +728,17 @@ class AppState extends ChangeNotifier {
     final key = '${e.id}|${r.id}';
     final prev = _responses[key];
     final now = DateTime.now();
+    final f = forecast.clamp(1, 5);
     _responses[key] = Response(
       expertId: e.id,
       riskId: r.id,
       items: Map.of(items),
-      forecast: forecast.clamp(1, 5),
+      forecast: f,
       answeredAt: prev?.answeredAt ?? now,
       editedAt: prev == null ? null : now,
       credit: credit ?? prev?.credit,
+      // A new check-in every time: earlier ones are kept, never overwritten.
+      history: [...?prev?.history, CheckIn(f, now)],
     );
     // "What is ACAPS missing?" answers become comments for the group.
     for (final entry in items.entries) {
@@ -543,11 +771,40 @@ class AppState extends ChangeNotifier {
           if (responseOf(e, r)?.forecast case final f?) f,
       ];
 
+  /// How far back the "then" of a trend looks: about one ACAPS update cycle.
+  static const trendWindow = Duration(days: 30);
+
+  /// The group view as it stood at [t]: each expert's latest check-in on or
+  /// before that date.
+  GroupView? groupAt(Risk r, DateTime t) => GroupView.of([
+        for (final e in panelForRisk(r))
+          if (responseOf(e, r)?.forecastAt(t) case final f?) f,
+      ]);
+
+  /// The panel's view now against [trendWindow] ago, and how many experts
+  /// changed their forecast in between. Null when there is nothing to compare.
+  ({GroupView then, GroupView now, DateTime since, int changed})? trendOf(Risk r) {
+    if (!r.isActive) return null; // closed risks: no live picture to follow
+    final since = DateTime.now().subtract(trendWindow);
+    final then = groupAt(r, since), now = GroupView.of(forecastsFor(r));
+    if (then == null || now == null) return null;
+    var changed = 0;
+    for (final e in panelForRisk(r)) {
+      final resp = responseOf(e, r);
+      final before = resp?.forecastAt(since);
+      if (before != null && resp!.forecast != before) changed++;
+    }
+    return (then: then, now: now, since: since, changed: changed);
+  }
+
   /// Simulated history for synthetic experts. Personas never have simulated
   /// answers on active risks, so whoever demos them can take the survey.
   Response? _simulated(Expert e, Risk r) {
     if (!e.simulated || !relevantTo(e, r)) return null;
     if (r.custom) return null; // a brand-new risk has no answers yet
+    // 7 risks in the export have no status: neither open nor closed, so
+    // nobody could answer them (and they would "wait" forever).
+    if (!r.isActive && !r.isResolved) return null;
     if (e.persona && r.isActive) return null;
     if (r.id != 'R1043' && Random(stableHash('${e.id}|${r.id}')).nextDouble() > e.participation) return null;
 
@@ -556,7 +813,8 @@ class AppState extends ChangeNotifier {
     // One forecast for the whole risk: close to ACAPS, and on closed risks
     // skilled experts lean towards what actually happened.
     final fr = Random(stableHash('${e.id}|${r.id}|forecast'));
-    var forecast = base + const [-2, -1, -1, 0, 0, 0, 0, 1, 1, 2][fr.nextInt(10)];
+    final story = _demoStories[r.id]?[e.id];
+    var forecast = story?.now ?? base + const [-2, -1, -1, 0, 0, 0, 0, 1, 1, 2][fr.nextInt(10)];
     if (r.isResolved && fr.nextDouble() < e.skill * 0.8) forecast += r.materialised ? 1 : -1;
     forecast = forecast.clamp(1, 5);
 
@@ -572,16 +830,53 @@ class AppState extends ChangeNotifier {
       final s = ((r.impact ?? 3) + const [-1, 0, 0, 0, 1][rnd.nextInt(5)]).clamp(1, 5);
       items[it.id] = ItemAnswer(agree: agree, severity: s);
     }
+    final today = DateTime(2026, 11, 6);
     final days = r.isResolved ? 190 + stableHash(r.id) % 60 : 1 + stableHash('${e.id}${r.id}') % 3;
+    final latest = today.subtract(Duration(days: days));
+
+    // Active risks: an earlier check-in about a month before, at the previous
+    // ACAPS update. Views mostly hold or move up a step as crises develop, so
+    // the demo shows a live picture, not a single snapshot.
+    var history = [CheckIn(forecast, latest)];
+    if (r.isActive) {
+      final hr = Random(stableHash('${e.id}|${r.id}|history'));
+      final earlier = story?.then ?? (forecast + const [0, 0, 0, 0, -1, -1, -1, 1][hr.nextInt(8)]).clamp(1, 5);
+      history = [CheckIn(earlier, today.subtract(Duration(days: 31 + hr.nextInt(6)))), ...history];
+    }
     return Response(
       expertId: e.id,
       riskId: r.id,
       items: items,
       forecast: forecast,
-      answeredAt: DateTime(2026, 11, 6).subtract(Duration(days: days)),
+      answeredAt: history.first.at,
+      editedAt: history.length > 1 ? latest : null,
       simulated: true,
+      history: history,
     );
   }
+
+  /// Demo storylines (synthetic, fixed so the demo tells a clear story):
+  /// each expert's forecast a month ago and now, on the 1-5 ACAPS scale.
+  static const _demoStories = <String, Map<String, ({int then, int now})>>{
+    // R1043: the panel moved from Medium to High after ACAPS's 30 Sep 2026
+    // update ("from a snapshot to a live picture").
+    'R1043': {
+      'e4': (then: 3, now: 4),
+      'e5': (then: 3, now: 4),
+      'e6': (then: 4, now: 4),
+      'e7': (then: 4, now: 5),
+      'e8': (then: 3, now: 3),
+    },
+    // R1049: the panel is split: no clear group view, so ACAPS knows this
+    // part of the analysis needs attention.
+    'R1049': {
+      'e4': (then: 2, now: 2),
+      'e6': (then: 2, now: 1),
+      'e7': (then: 4, now: 5),
+      'e9': (then: 3, now: 4),
+      'e11': (then: 2, now: 2),
+    },
+  };
 
   // =========================================================================
   // Scoring & rating
@@ -617,6 +912,7 @@ class AppState extends ChangeNotifier {
       if (c.useful) points += Points.usefulComment;
       if (c.usedInRiskId != null) points += Points.usedComment;
     }
+    points += Points.referral * referralsBy(e);
     return (points: points, resolved: n, brier: n == 0 ? null : sum / n);
   }
 
@@ -727,7 +1023,9 @@ class AppState extends ChangeNotifier {
     final all = [for (final it in r.surveyItems) ...answersFor(r, it.id)];
     final cs = commentsOn(r);
     // Group forecast = median (Delphi-style; one outlier cannot drag it).
-    final mean = GroupView.of(forecastsFor(r))?.median;
+    final group = GroupView.of(forecastsFor(r));
+    final mean = group?.median;
+    final trend = trendOf(r);
     final disagree = all.isEmpty
         ? 0.0
         : all.fold(0.0, (s, a) => s + (a.agree == Agreement.no ? 1 : (a.agree == Agreement.partly ? 0.5 : 0))) / all.length;
@@ -739,6 +1037,9 @@ class AppState extends ChangeNotifier {
       expertLikelihood: mean,
       acapsLikelihood: r.acapsLikelihood,
       disagreement: disagree,
+      group: group,
+      moved: trend == null ? 0 : trend.now.median - trend.then.median,
+      changed: trend?.changed ?? 0,
     );
   }
 
@@ -817,10 +1118,15 @@ class AppState extends ChangeNotifier {
           if (publicCredit(e, responseOf(e, r)?.credit) case final c?) c,
       ]..sort((a, b) => a.name.compareTo(b.name));
 
-  /// What the public may see for one risk: aggregates only, no comments, no
-  /// respondent countries; no results at all below [minPanel] respondents.
-  /// With [credits], experts who agreed are listed as contributors (never
-  /// next to an answer).
+  /// Probability as spelled in the Risk Radar export / API.
+  static const _radarProbability = ['Very Low', 'Low', 'Medium', 'High', 'Very High'];
+
+  /// Expert input for one risk, ready for ACAPS's own systems: the risk's
+  /// fields with the same names as the Risk Radar export / API (so ACAPS can
+  /// join it to its own data), plus an `expert_input` block. Aggregates only:
+  /// no comments, no respondent countries, no names next to answers; no
+  /// results at all below [minPanel] respondents. With [credits], experts
+  /// who chose to be named are listed as contributors.
   Map<String, dynamic> publicView(Risk r, {bool credits = false}) {
     final n = respondents(r).length;
     List<int> dist(Iterable<int> xs) {
@@ -842,70 +1148,94 @@ class AppState extends ChangeNotifier {
       };
     }
 
+    final published = n >= minPanel;
     return {
-      'risk_id': r.id,
-      'title': r.title,
-      'countries': riskCountries(r),
-      'status': r.status,
-      'acaps': {
-        'probability': r.probabilityIdx == null ? null : levelLabels[r.probabilityIdx!],
-        'probability_range': r.probabilityIdx == null ? null : probabilityRanges[r.probabilityIdx!],
-        'probability_1_5': r.acapsLikelihood,
-        'impact_1_5': r.impact,
-        'risk_level': r.level.isEmpty ? null : r.level,
+      // ACAPS's own fields, named exactly as in the Risk Radar export / API.
+      'Risk ID': r.id,
+      'Risk Title': r.title,
+      'Risk Type': r.type,
+      'ISO': r.iso,
+      'Country': r.country,
+      'Probability': r.probabilityIdx == null ? null : _radarProbability[r.probabilityIdx!],
+      'Impact': r.impact,
+      'Risk Level': r.level.isEmpty ? null : r.level,
+      'Risk trend': r.trend.isEmpty ? null : r.trend,
+      'Status': r.status,
+      // What this tool adds.
+      'expert_input': {
+        'panel_size': panelForRisk(r).length,
+        'respondents': n,
+        'published': published,
+        if (published) ...() {
+          final f = forecastsFor(r);
+          final g = GroupView.of(f);
+          final tr = trendOf(r);
+          return {
+            // The one scored question, on the ACAPS probability scale.
+            'forecast': {
+              'question': 'Will this risk materialise within 6 months?',
+              'answers': f.length,
+              ...group(f, (g) => g.probability),
+              // Experts disagree among themselves: no trustworthy group answer.
+              'opinions_split': g?.split ?? false,
+              // The live picture: the group view now against one update cycle ago.
+              if (tr != null)
+                'trend': {
+                  'since': tr.since.toIso8601String().substring(0, 10),
+                  'then_median_1_5': tr.then.median,
+                  'now_median_1_5': tr.now.median,
+                  'then_label': tr.then.short,
+                  'now_label': tr.now.short,
+                  'experts_changed': tr.changed,
+                },
+            },
+            // Ground truthing per trigger (not scored). Trigger fields use the
+            // names of the export's structured Triggers field.
+            'triggers': [
+              for (final it in r.surveyItems)
+                () {
+                  final a = answersFor(r, it.id);
+                  final s = [for (final x in a) x.severity];
+                  return {
+                    'Trigger ID': r.triggers.isEmpty ? null : it.id,
+                    'Title': it.title,
+                    'answers': a.length,
+                    'agreement_with_acaps': {for (final g in Agreement.values) g.name: a.where((x) => x.agree == g).length},
+                    'severity': group(s, (g) => g.severity),
+                  };
+                }(),
+            ],
+          };
+        }(),
+        if (published && credits) ...() {
+          final cs = creditsFor(r);
+          return {
+            'contributors': [
+              for (final c in cs) {'name': c.name, 'credited_as': c.as == Credit.realName ? 'real_name' : 'pseudonym'},
+            ],
+            'anonymous_contributors': n - cs.length,
+          };
+        }(),
       },
-      'respondents': n,
-      'published': n >= minPanel,
-      if (n >= minPanel) ...() {
-        final f = forecastsFor(r);
-        return {
-          // The one scored question, on the ACAPS probability scale.
-          'forecast': {
-            'question': 'Will this risk materialise within 6 months?',
-            'answers': f.length,
-            ...group(f, (g) => g.probability),
-          },
-          // Ground truthing per trigger (not scored).
-          'questions': [
-            for (final it in r.surveyItems)
-              () {
-                final a = answersFor(r, it.id);
-                final s = [for (final x in a) x.severity];
-                return {
-                  'id': it.id,
-                  'title': it.title,
-                  'answers': a.length,
-                  'agreement_with_acaps': {for (final g in Agreement.values) g.name: a.where((x) => x.agree == g).length},
-                  'severity': group(s, (g) => g.severity),
-                };
-              }(),
-          ],
-        };
-      }(),
-      if (n >= minPanel && credits) ...() {
-        final cs = creditsFor(r);
-        return {
-          'contributors': [
-            for (final c in cs) {'name': c.name, 'credited_as': c.as == Credit.realName ? 'real_name' : 'pseudonym'},
-          ],
-          'anonymous_contributors': n - cs.length,
-        };
-      }(),
     };
   }
 
-  /// A file ready to publish: one risk, or every risk with enough respondents.
+  /// Expert input for ACAPS's systems: one risk, or every risk with enough
+  /// respondents. Risk fields use the Risk Radar / API names, so ACAPS can
+  /// join it to its own data instead of copying files around.
   String publicViewJson(Iterable<Risk> rs, {bool credits = false}) => const JsonEncoder.withIndent('  ').convert({
-        'schema': 'acaps-ground-truth/public-view/v2',
+        'schema': 'acaps-ground-truth/expert-input/v3',
         'generated_at': DateTime.now().toUtc().toIso8601String(),
+        'field_names': 'Risk fields as in the ACAPS Risk Radar export / API (data/risk-radar-export.csv); '
+            'expert_input is added by Ground Truth.',
         'min_respondents': minPanel,
         'probability_scale': {
-          for (var i = 0; i < 5; i++) '${i + 1}': {'label': levelLabels[i], 'range': probabilityRanges[i]},
+          for (var i = 0; i < 5; i++) '${i + 1}': {'label': _radarProbability[i], 'range': probabilityRanges[i]},
         },
         'risks': [for (final r in rs) publicView(r, credits: credits)],
       });
 
-  /// Risks whose public view would show results.
+  /// Risks with enough respondents for their expert input to be shared.
   List<Risk> get publishableRisks =>
       risks.where((r) => (r.isActive || r.isResolved) && respondents(r).length >= minPanel).toList();
 
@@ -916,6 +1246,26 @@ class AppState extends ChangeNotifier {
   // =========================================================================
   // Seed data (synthetic: no real experts)
   // =========================================================================
+
+  /// Demo single-use invites (synthetic). Open ones work once each with the
+  /// demo "Register" button; the used one shows what happens after.
+  void _seedInvites() {
+    final r = Random(42);
+    Invite make(String country, int daysAgo, String note, {bool used = false}) => Invite(
+          code: newInviteCode(r),
+          country: country,
+          createdBy: 'm1',
+          createdAt: DateTime(2026, 11, 6).subtract(Duration(days: daysAgo)),
+          note: note,
+          usedAt: used ? DateTime(2026, 11, 6).subtract(Duration(days: daysAgo - 2)) : null,
+        );
+    invites = [
+      make('Chad', 2, 'Protection officer, Abéché'),
+      make('Chad', 2, "Researcher, N'Djamena"),
+      make('Chad', 9, 'Local NGO lead, Adré', used: true),
+      make('Sudan', 4, 'Early warning analyst, El Fasher'),
+    ];
+  }
 
   void _seed() {
     experts = [
@@ -949,9 +1299,17 @@ class AppState extends ChangeNotifier {
           homeCountry: 'Kenya', interests: {'Sudan', 'Ethiopia'}, simulated: true, participation: 0.9, skill: 0.75),
       Expert(id: 'e12', realName: 'Aïssata Traoré', pseudonym: 'Cedar-66', level: Anonymity.pseudonymous,
           homeCountry: 'Mali', interests: {'Niger'}, simulated: true, participation: 0.8, skill: 0.6),
+      // Joined on 4 Nov through Harmattan-17's referral link; no answers yet.
+      Expert(id: 'e13', realName: null, pseudonym: 'Rift-07', level: Anonymity.anonymous,
+          homeCountry: 'Kenya', simulated: true, participation: 0, skill: 0.5),
     ];
     _responses.clear();
     _skipped.clear();
+    _seedInvites();
+    _ensureReferralCodes(Random(7));
+    // Demo: two colleagues joined through Amina's (Harmattan-17) link: one
+    // has answered many risks, one has only just joined.
+    referrals = [Referral('p1', DateTime(2026, 10, 20), 'e12'), Referral('p1', DateTime(2026, 11, 4), 'e13')];
     final t1 = 'R1043 - T0618', t2 = 'R1043 - T0619', t3 = 'R1043 - T0620';
     comments = [
       Comment(id: 's1', riskId: 'R1043', itemId: t1, authorId: 'e6',
@@ -1009,6 +1367,10 @@ class AppState extends ChangeNotifier {
         'custom_risks': [for (final r in risks.where((r) => r.custom)) r.toJson()],
         'skipped': {for (final e in _skipped.entries) e.key: e.value.toList()},
         'invite': invitePanel,
+        'invite_code': pendingInviteCode,
+        'last_invite': lastOpenedInvite,
+        'invites': [for (final i in invites) i.toJson()],
+        'referrals': [for (final r in referrals) r.toJson()],
         'session': sessionExpertId,
         'moderator': sessionModeratorId,
       }),
@@ -1036,6 +1398,15 @@ class AppState extends ChangeNotifier {
             e.key as String: {...(e.value as List).cast<String>()},
         });
       invitePanel = m['invite'] as String?;
+      pendingInviteCode = m['invite_code'] as String?;
+      lastOpenedInvite = m['last_invite'] as String?;
+      if (m['invites'] is List) {
+        invites = [for (final i in m['invites'] as List) Invite.fromJson((i as Map).cast<String, dynamic>())];
+      } else {
+        _seedInvites(); // saved before single-use invites existed
+      }
+      referrals = [for (final r in (m['referrals'] as List? ?? const [])) Referral.fromJson((r as Map).cast<String, dynamic>())];
+      if (_ensureReferralCodes()) _save(); // saved before referral links existed: fix them now
       sessionExpertId = m['session'] as String?;
       final mod = m['moderator'];
       sessionModeratorId = mod == true ? moderators.first.id : moderatorById(mod is String ? mod : null)?.id;

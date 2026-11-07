@@ -503,7 +503,8 @@ class _ForecastPage extends StatelessWidget {
   }
 }
 
-/// "If ACAPS publishes this risk, list me as ..." Defaults to the profile.
+/// "If ACAPS publishes this risk, list me as ..." Starts at the expert's
+/// profile anonymity level; they can change it for this risk.
 class CreditPicker extends StatelessWidget {
   final Expert expert;
   final Credit value;
@@ -532,8 +533,9 @@ class CreditPicker extends StatelessWidget {
             const SizedBox(height: 10),
             SegmentedButton<Credit>(
               showSelectedIcon: false,
+              // Same order as the anonymity levels: 1 real name, 2 pseudonym, 3 anonymous.
               segments: [
-                for (final c in Credit.values)
+                for (final c in const [Credit.realName, Credit.pseudonym, Credit.anonymous])
                   ButtonSegment(value: c, label: Text(c.label), enabled: creditAllowed(expert, c)),
               ],
               selected: {value},
@@ -543,7 +545,7 @@ class CreditPicker extends StatelessWidget {
             Text(
               '${shown == null ? 'Not listed. Your answers only count in the totals.' : 'Listed among contributors as "${shown.name}".'} '
               'Names are never shown next to answers.'
-              '${isDefault ? ' This is the default from your profile.' : ''}'
+              '${isDefault ? ' This matches your profile (level ${expert.level.number}: ${expert.level.label}); you can change it for this risk.' : ''}'
               '${expert.realName == null ? ' Real name is off: your profile is fully anonymous.' : ''}',
               style: t.bodySmall,
             ),
@@ -798,24 +800,83 @@ List<int> countsOf(Iterable<int> xs) {
   return c;
 }
 
-/// Headline of a group view: the median in bold, then how far experts agree.
+/// Headline of a group view: the group answer (or "opinions split") in bold,
+/// then how far experts agree.
 class GroupLine extends StatelessWidget {
-  final String answer;
-  final String spread;
-  final int n;
+  final GroupView group;
+
+  /// Forecast (ACAPS probability words) or "how bad" (1-5).
+  final bool forecast;
   final String noun;
-  const GroupLine({super.key, required this.answer, required this.spread, required this.n, required this.noun});
+  const GroupLine({super.key, required this.group, required this.forecast, required this.noun});
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
+    final g = group;
+    final splitColor = agreementColors[Agreement.partly]!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Group: $answer', style: t.titleSmall),
+        Row(
+          children: [
+            if (g.split) ...[Icon(Icons.call_split, size: 18, color: splitColor), const SizedBox(width: 6)],
+            Expanded(
+              child: Text(forecast ? g.probabilityHeadline : g.severityHeadline,
+                  style: t.titleSmall?.copyWith(color: g.split ? splitColor : null)),
+            ),
+          ],
+        ),
         const SizedBox(height: 2),
-        Text('$spread · $n ${n == 1 ? noun : '${noun}s'}', style: t.bodySmall),
+        Text('${g.spread(forecast ? levelLabels : const ['1', '2', '3', '4', '5'])} · ${g.n} ${g.n == 1 ? noun : '${noun}s'}',
+            style: t.bodySmall),
       ],
+    );
+  }
+}
+
+/// How the panel's view moved since the last update cycle (about a month):
+/// "Since 8 Oct 2026: Medium → High · 3 of 7 experts changed their forecast".
+class TrendLine extends StatelessWidget {
+  final Risk risk;
+  const TrendLine({super.key, required this.risk});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final tr = appState.trendOf(risk);
+    if (tr == null) return const SizedBox.shrink();
+    final moved = tr.now.median - tr.then.median;
+    final same = tr.then.short == tr.now.short;
+    final (icon, color) = moved > 0
+        ? (Icons.trending_up, agreementColors[Agreement.no]!)
+        : moved < 0
+            ? (Icons.trending_down, agreementColors[Agreement.yes]!)
+            : (Icons.trending_flat, cs.onSurfaceVariant);
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(120), borderRadius: BorderRadius.circular(10)),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text.rich(
+              TextSpan(children: [
+                TextSpan(text: 'Since ${formatDate(tr.since)}: '),
+                TextSpan(
+                  text: same ? 'no change (${tr.now.short})' : '${tr.then.short} → ${tr.now.short}',
+                  style: TextStyle(fontWeight: FontWeight.w800, color: same ? null : color),
+                ),
+                TextSpan(text: ' · ${tr.changed} of ${tr.now.n} experts changed their forecast'),
+              ]),
+              style: t.bodySmall,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -842,8 +903,9 @@ class ForecastSummary extends StatelessWidget {
             if (g == null)
               Text('No forecasts yet.', style: t.labelLarge)
             else
-              GroupLine(answer: g.probability, spread: g.spread(levelLabels), n: g.n, noun: 'forecast'),
+              GroupLine(group: g, forecast: true, noun: 'forecast'),
             Distribution(counts: countsOf(fs), mine: mine, acaps: risk.acapsLikelihood, labels: forecastButtonLabels),
+            TrendLine(risk: risk),
           ],
         ),
       ),
@@ -884,7 +946,7 @@ class ItemSummary extends StatelessWidget {
             Text('How bad it would be', style: t.labelLarge),
             if (GroupView.of(answers.map((a) => a.severity)) case final g?) ...[
               const SizedBox(height: 6),
-              GroupLine(answer: g.severity, spread: g.spread(const ['1', '2', '3', '4', '5']), n: g.n, noun: 'answer'),
+              GroupLine(group: g, forecast: false, noun: 'answer'),
             ],
             Distribution(counts: count((a) => a.severity), mine: mine?.severity, acaps: risk.impact),
           ],
@@ -1129,6 +1191,23 @@ class MaturedBlock extends StatelessWidget {
           if (text.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(text, style: t.bodySmall?.copyWith(height: 1.45)),
+          ],
+          if (risk.fromEarlierList) ...[
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.history_toggle_off, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'From ACAPS\'s earlier risk list: it resolved over a longer period than 6 months, '
+                    'so scores on it are indicative, not a true 6-month forecast.',
+                    style: t.bodySmall?.copyWith(fontStyle: FontStyle.italic),
+                  ),
+                ),
+              ],
+            ),
           ],
           if (s != null) ...[
             const SizedBox(height: 10),

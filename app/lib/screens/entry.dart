@@ -1,11 +1,24 @@
 import 'package:flutter/material.dart';
 
+import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'profile.dart';
 
-/// Step 1: the group is closed. You only get in with an ACAPS QR code.
+/// Why an opened invite link did not work, in plain words.
+String? inviteErrorMessage(InviteStatus? s) => switch (s) {
+      null || InviteStatus.ok => null,
+      InviteStatus.unknown => 'This is not a valid ACAPS invite link. The groups are closed: ask your ACAPS contact for an invite link.',
+      InviteStatus.used => 'This invite link has already been used. Each link works once, for one person: '
+          'ask your ACAPS contact for a new one.',
+      InviteStatus.revoked => 'This invite link was cancelled by ACAPS. Ask your ACAPS contact for a new one.',
+    };
+
+/// Step 1, the start screen: the group is closed. New members get in only by
+/// opening the personal invite link ACAPS sent them (the app then starts with
+/// ?invite=...). There is deliberately no field to paste links or codes into.
+/// Existing members log in.
 class InviteScreen extends StatefulWidget {
   const InviteScreen({super.key});
 
@@ -14,19 +27,18 @@ class InviteScreen extends StatefulWidget {
 }
 
 class _InviteScreenState extends State<InviteScreen> {
-  final _code = TextEditingController();
   String? _error;
 
-  @override
-  void dispose() {
-    _code.dispose();
-    super.dispose();
-  }
-
-  void _redeem(String code) {
-    if (appState.redeemInvite(code) == null) {
-      setState(() => _error = 'This is not a valid ACAPS invite. The groups are closed: ask your ACAPS contact for a QR code.');
+  /// Demo "Register": as if the expert tapped the invite link ACAPS sent them.
+  /// A valid link goes straight to the profile form.
+  void _openDemoLink() {
+    final i = appState.demoInvite;
+    if (i == null) {
+      setState(() => _error = 'All demo invite links have been used: each works once. '
+          'Log in as a moderator to create a new one, or reset the demo.');
+      return;
     }
+    appState.redeemInvite(i.code);
   }
 
   @override
@@ -50,29 +62,39 @@ class _InviteScreenState extends State<InviteScreen> {
                       border: Border.all(color: Theme.of(context).colorScheme.primary, width: 3),
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Icon(Icons.qr_code_2, size: 110, color: Theme.of(context).colorScheme.primary),
+                    child: Icon(Icons.link, size: 110, color: Theme.of(context).colorScheme.primary),
                   ),
                 ),
                 const SizedBox(height: 16),
-                Text('Scan the QR code you received from ACAPS', textAlign: TextAlign.center, style: t.titleMedium),
+                Text('Join with the invite link you received from ACAPS', textAlign: TextAlign.center, style: t.titleMedium),
+                const SizedBox(height: 6),
+                Text('Your link is your way in: it is personal and works once. '
+                    'In the demo, Register uses one of the demo invite links.',
+                    textAlign: TextAlign.center, style: t.bodySmall),
                 const SizedBox(height: 16),
                 FilledButton.icon(
-                  onPressed: () => _redeem(inviteCodes.keys.first),
-                  icon: const Icon(Icons.qr_code_scanner),
-                  label: const Text('Scan QR code (demo)'),
+                  onPressed: _openDemoLink,
+                  icon: const Icon(Icons.person_add_alt),
+                  label: const Text('Register'),
                 ),
-                const SizedBox(height: 20),
-                TextField(
-                  controller: _code,
-                  textCapitalization: TextCapitalization.characters,
-                  onSubmitted: _redeem,
-                  decoration: InputDecoration(
-                    labelText: 'Or type the invite code',
-                    hintText: inviteCodes.keys.first,
-                    errorText: _error,
-                    errorMaxLines: 3,
-                    suffixIcon: IconButton(icon: const Icon(Icons.arrow_forward), onPressed: () => _redeem(_code.text)),
-                  ),
+                if (_error != null) ...[
+                  const SizedBox(height: 10),
+                  InfoBanner(icon: Icons.link_off, color: Theme.of(context).colorScheme.error, text: _error!),
+                ],
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    const Expanded(child: Divider()),
+                    Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: Text('Already a member?', style: t.bodySmall)),
+                    const Expanded(child: Divider()),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                  onPressed: appState.openLogin,
+                  icon: const Icon(Icons.login),
+                  label: const Text('Log in'),
                 ),
               ],
             ),
@@ -83,7 +105,9 @@ class _InviteScreenState extends State<InviteScreen> {
   }
 }
 
-/// Step 2: for the MVP you pick a synthetic demo user instead of logging in.
+/// Log in as an existing member (for the MVP: pick a synthetic demo user or
+/// a moderator). New members never come here: a valid invite link goes
+/// straight to the profile form. Also shown when an opened link did not work.
 class SignInScreen extends StatelessWidget {
   const SignInScreen({super.key});
 
@@ -92,18 +116,34 @@ class SignInScreen extends StatelessWidget {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
     final personas = appState.experts.where((e) => e.persona || !e.simulated).toList();
+    final error = inviteErrorMessage(appState.inviteError);
 
     return Scaffold(
       body: ListView(
         padding: EdgeInsets.zero,
         children: [
-          _Hero(subtitle: 'Invite accepted: ${appState.invitePanel} panel.'),
+          const _Hero(subtitle: 'Log in'),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SectionLabel('Continue as a demo expert'),
+                // Way out first, so nobody has to scroll past every account.
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                    onPressed: appState.backToStart,
+                    icon: const Icon(Icons.arrow_back, size: 18),
+                    label: const Text('Back to start'),
+                  ),
+                ),
+                Text('New here? Open the personal invite link you were sent.', style: t.bodySmall),
+                if (error != null) ...[
+                  const SizedBox(height: 16),
+                  InfoBanner(icon: Icons.link_off, color: cs.error, text: error),
+                ],
+                const SectionLabel('Log in as a demo expert'),
                 Text('All users are synthetic. No passwords in the demo.', style: t.bodySmall),
                 const SizedBox(height: 8),
                 for (final e in personas)
@@ -138,13 +178,6 @@ class SignInScreen extends StatelessWidget {
                       ),
                     ),
                   ),
-                const SizedBox(height: 16),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RegisterScreen())),
-                  icon: const Icon(Icons.person_add_alt),
-                  label: const Text('I am new: create my profile'),
-                ),
               ],
             ),
           ),
@@ -187,10 +220,24 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Your profile')),
+      appBar: AppBar(
+        title: const Text('Your profile'),
+        // First screen after opening an invite link: back goes to the start.
+        leading: IconButton(tooltip: 'Back', icon: const Icon(Icons.arrow_back), onPressed: appState.backToStart),
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
         children: [
+          const SizedBox(height: 12),
+          InfoBanner(
+            icon: Icons.link,
+            text: appState.pendingReferrer != null
+                ? 'You were invited by a colleague in the ACAPS expert group. Welcome. '
+                    'They will see your progress (how many risks you have answered), never your name, '
+                    'pseudonym, answers or comments. You choose your own anonymity below.'
+                : 'Your invite link is valid. It is used up when you join: it works once, for one person, '
+                    'and is not linked to your account, so your anonymity choice stays yours.',
+          ),
           const SectionLabel('1. How visible do you want to be?'),
           for (final a in Anonymity.values)
             OptionTile(
