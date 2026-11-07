@@ -113,7 +113,11 @@ double snapTextScale(double v) =>
 const minPanel = 3;
 const minResolvedForBrier = 3;
 
-enum Award { superEstimator, usefulInsight, cited, regular }
+enum Award { superEstimator, usefulInsight, cited, regular, referralMaster }
+
+/// Colleagues who must have joined through your referral link for the
+/// Referral Master badge.
+const referralMasterMin = 3;
 
 extension AwardText on Award {
   String get label => switch (this) {
@@ -121,6 +125,7 @@ extension AwardText on Award {
         Award.usefulInsight => 'Useful insight',
         Award.cited => 'Cited in analysis',
         Award.regular => 'Regular',
+        Award.referralMaster => 'Referral Master',
       };
 
   String get why => switch (this) {
@@ -128,6 +133,30 @@ extension AwardText on Award {
         Award.usefulInsight => 'A moderator marked your comment as useful',
         Award.cited => 'Your comment was used in the analysis of another risk',
         Award.regular => 'Answered 5 or more risk surveys',
+        Award.referralMaster => 'Invited $referralMasterMin or more experts who joined the community with your referral link',
+      };
+}
+
+/// The second trust signal, next to how an expert joined: what they do in
+/// the app. Moderators only. In the demo it comes from the simulated history.
+enum Activity { newcomer, active, established }
+
+/// Risks answered to count as active, and accuracy (with at least
+/// [minResolvedForBrier] matured forecasts) that counts as a quality record.
+const activeMinAnswers = 3, establishedMinAccuracy = 70;
+
+extension ActivityText on Activity {
+  String get label => switch (this) {
+        Activity.newcomer => 'New',
+        Activity.active => 'Active',
+        Activity.established => 'Established',
+      };
+
+  String get why => switch (this) {
+        Activity.newcomer => 'Fewer than $activeMinAnswers risks answered so far',
+        Activity.active => '$activeMinAnswers or more risks answered',
+        Activity.established => '$activeMinAnswers+ risks answered, and a comment marked useful or used in analysis, '
+            'or accuracy of $establishedMinAccuracy%+ over $minResolvedForBrier+ matured forecasts',
       };
 }
 
@@ -571,6 +600,8 @@ class AppState extends ChangeNotifier {
     }
     final e = Expert(
       id: 'u${DateTime.now().millisecondsSinceEpoch}',
+      // The door check, for moderators: how this person got in.
+      joinedVia: referrer != null && (invite == null || !invite.open) ? JoinedVia.expertReferral : JoinedVia.acapsInvite,
       realName: level.needsRealName ? realName?.trim() : null,
       pseudonym: pseudonym.trim(),
       level: level,
@@ -925,6 +956,7 @@ class AppState extends ChangeNotifier {
       if (cs.any((c) => c.useful)) Award.usefulInsight,
       if (cs.any((c) => c.usedInRiskId != null)) Award.cited,
       if (responsesOf(e).length >= 5) Award.regular,
+      if (referralsBy(e) >= referralMasterMin) Award.referralMaster,
     };
   }
 
@@ -934,6 +966,15 @@ class AppState extends ChangeNotifier {
     final xs = _brierRanked();
     final i = xs.indexWhere((x) => x.id == e.id);
     return i < 0 ? null : (rank: i + 1, of: xs.length);
+  }
+
+  /// What an expert does in the app, as a trust signal for moderators.
+  Activity expertActivity(Expert e) {
+    if (responsesOf(e).length < activeMinAnswers) return Activity.newcomer;
+    final st = statsOf(e);
+    final usefulComment = commentsBy(e).any((c) => c.useful || c.usedInRiskId != null);
+    final accurate = st.brier != null && st.resolved >= minResolvedForBrier && accuracyPct(st.brier!) >= establishedMinAccuracy;
+    return usefulComment || accurate ? Activity.established : Activity.active;
   }
 
   List<Expert> _brierRanked() {
@@ -1294,22 +1335,30 @@ class AppState extends ChangeNotifier {
       Expert(id: 'e9', realName: 'Omar Bashir', pseudonym: 'Atlas-77', level: Anonymity.pseudonymous,
           homeCountry: 'Sudan', interests: {'South Sudan'}, simulated: true, participation: 0.8, skill: 0.55),
       Expert(id: 'e10', realName: null, pseudonym: 'Monsoon-04', level: Anonymity.anonymous,
-          homeCountry: 'South Sudan', simulated: true, participation: 0.7, skill: 0.45),
+          homeCountry: 'South Sudan', simulated: true, participation: 0.7, skill: 0.45,
+          joinedVia: JoinedVia.expertReferral),
       Expert(id: 'e11', realName: 'Wanjiru Kamau', pseudonym: 'Compass-19', level: Anonymity.knownToAcaps,
           homeCountry: 'Kenya', interests: {'Sudan', 'Ethiopia'}, simulated: true, participation: 0.9, skill: 0.75),
       Expert(id: 'e12', realName: 'Aïssata Traoré', pseudonym: 'Cedar-66', level: Anonymity.pseudonymous,
-          homeCountry: 'Mali', interests: {'Niger'}, simulated: true, participation: 0.8, skill: 0.6),
+          homeCountry: 'Mali', interests: {'Niger'}, simulated: true, participation: 0.8, skill: 0.6,
+          joinedVia: JoinedVia.expertReferral),
       // Joined on 4 Nov through Harmattan-17's referral link; no answers yet.
       Expert(id: 'e13', realName: null, pseudonym: 'Rift-07', level: Anonymity.anonymous,
-          homeCountry: 'Kenya', simulated: true, participation: 0, skill: 0.5),
+          homeCountry: 'Kenya', simulated: true, participation: 0, skill: 0.5,
+          joinedVia: JoinedVia.expertReferral),
     ];
     _responses.clear();
     _skipped.clear();
     _seedInvites();
     _ensureReferralCodes(Random(7));
-    // Demo: two colleagues joined through Amina's (Harmattan-17) link: one
-    // has answered many risks, one has only just joined.
-    referrals = [Referral('p1', DateTime(2026, 10, 20), 'e12'), Referral('p1', DateTime(2026, 11, 4), 'e13')];
+    // Demo: three colleagues joined through Amina's (Harmattan-17) link, so
+    // she is a Referral Master: two have answered many risks, one has only
+    // just joined.
+    referrals = [
+      Referral('p1', DateTime(2026, 10, 20), 'e12'),
+      Referral('p1', DateTime(2026, 10, 28), 'e10'),
+      Referral('p1', DateTime(2026, 11, 4), 'e13'),
+    ];
     final t1 = 'R1043 - T0618', t2 = 'R1043 - T0619', t3 = 'R1043 - T0620';
     comments = [
       Comment(id: 's1', riskId: 'R1043', itemId: t1, authorId: 'e6',

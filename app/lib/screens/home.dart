@@ -1024,6 +1024,7 @@ class AwardIcon extends StatelessWidget {
       Award.usefulInsight => (Icons.lightbulb_outline, const Color(0xFF6E9E72)),
       Award.cited => (Icons.push_pin_outlined, const Color(0xFF2E7DAF)),
       Award.regular => (Icons.repeat, const Color(0xFF8A6FB0)),
+      Award.referralMaster => (Icons.group_add_outlined, const Color(0xFF2A9D8F)),
     };
     return Tooltip(
       message: badge.label,

@@ -56,6 +56,13 @@ void main() {
       await tester.tap(find.text('Experts').last);
       await tester.pumpAndSettle();
       expect(find.text('Invite experts'), findsNothing);
+      // Trust signals: how each expert got in, and a filter for it.
+      expect(find.text('Invited by ACAPS'), findsWidgets);
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Referred by an expert'));
+      await tester.pumpAndSettle();
+      expect(find.text('3 experts'), findsOneWidget); // Cedar-66, Monsoon-04, Rift-07
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Everyone'));
+      await tester.pumpAndSettle();
 
       // Profile: this moderator's name and display settings.
       await tester.tap(find.text('Profile').last);
@@ -364,18 +371,72 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('INVITE A COLLEAGUE'), findsOneWidget);
     expect(find.textContaining('?invite=REF-'), findsOneWidget);
-    expect(find.textContaining('2 colleagues joined through your link · +200 points'), findsOneWidget);
+    expect(find.textContaining('3 colleagues joined through your link · +300 points'), findsOneWidget);
+    expect(find.textContaining('Referral Master: you invited 3 experts'), findsOneWidget);
     // Progress per colleague: stage only, no names.
     expect(find.text('Colleague 1'), findsOneWidget);
     expect(find.text('Colleague 2'), findsOneWidget);
+    expect(find.text('Colleague 3'), findsOneWidget);
+    // One colleague at each stage: fully active, part way, just joined.
     expect(find.textContaining('fully active'), findsOneWidget);
+    expect(find.textContaining(RegExp(r'^Answered [12] of 3 risks')), findsOneWidget);
     expect(find.text('Joined · no risks answered yet'), findsOneWidget);
     expect(find.textContaining('Cedar-66'), findsNothing);
+    // Experts never see how they (or anyone) joined: moderators only.
+    expect(find.text('Invited by ACAPS'), findsNothing);
+    expect(find.text('Referred by an expert'), findsNothing);
     expect(find.textContaining('Rift-07'), findsNothing);
     // It comes after the anonymity level section.
     expect(tester.getTopLeft(find.text('INVITE A COLLEAGUE')).dy,
         greaterThan(tester.getTopLeft(find.text('ANONYMITY LEVEL')).dy));
     expect(find.textContaining('Demo: you get +100 points'), findsOneWidget);
+  });
+
+  test('trust signals: how an expert joined, and what they do', () async {
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    // Moderator invite -> "Invited by ACAPS".
+    s.signInModerator('m1');
+    final i = s.createInvite();
+    s.openInviteLink(inviteLink(i.code));
+    final a = s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Via-ACAPS', homeCountry: 'Chad',
+        interests: {}, notifications: true, onRating: true);
+    expect(a.joinedVia, JoinedVia.acapsInvite);
+    // Expert referral -> "Referred by an expert".
+    s.signOut();
+    s.openInviteLink(inviteLink(s.expertById('p2')!.referralCode));
+    final b = s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Via-Ref', homeCountry: 'Chad',
+        interests: {}, notifications: true, onRating: true);
+    expect(b.joinedVia, JoinedVia.expertReferral);
+    // Kept after a restart.
+    final again = AppState();
+    await again.load();
+    expect(again.expertById(b.id)!.joinedVia, JoinedVia.expertReferral);
+
+    // Activity: new until 3 risks answered; established with a quality record.
+    expect(s.expertActivity(b), Activity.newcomer);
+    expect(s.expertActivity(s.expertById('e13')!), Activity.newcomer);
+    expect(s.expertActivity(s.expertById('e12')!), Activity.active);
+    expect(s.expertActivity(s.expertById('e4')!), Activity.established);
+  });
+
+  test('Referral Master badge: 3 or more experts joined with your link', () async {
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    expect(Award.referralMaster.label, 'Referral Master');
+    expect(s.badgesOf(s.expertById('p1')!), contains(Award.referralMaster)); // demo: 3 referrals
+    final p2 = s.expertById('p2')!;
+    for (var i = 1; i <= 3; i++) {
+      expect(s.badgesOf(p2).contains(Award.referralMaster), isFalse);
+      s.signOut();
+      s.openInviteLink(inviteLink(p2.referralCode));
+      s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'New-$i', homeCountry: 'Chad',
+          interests: {}, notifications: true, onRating: true);
+    }
+    expect(s.referralsBy(p2), 3);
+    expect(s.badgesOf(p2), contains(Award.referralMaster));
   });
 
   test('invite links are single-use and never linked to the account', () async {

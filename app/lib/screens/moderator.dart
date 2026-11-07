@@ -1855,6 +1855,8 @@ class _ModComment extends StatelessWidget {
                 Text('NEW', style: TextStyle(color: cs.primary, fontWeight: FontWeight.w900, fontSize: 11, letterSpacing: 1)),
             ],
           ),
+          // How far to trust the author: how they got in, and what they do.
+          if (author != null) ...[const SizedBox(height: 6), TrustPills(author)],
           const SizedBox(height: 8),
           Text(c.text, style: const TextStyle(height: 1.4)),
           const SizedBox(height: 8),
@@ -2146,6 +2148,41 @@ class _GroupForecast extends StatelessWidget {
 // Experts: one directory, sortable by rating
 // ===========================================================================
 
+/// The two trust signals moderators see for an expert: how they got in (an
+/// ACAPS invite or an expert's referral) and what they do in the app.
+/// Neither says who they are; colleagues and the expert never see this.
+class TrustPills extends StatelessWidget {
+  final Expert expert;
+  const TrustPills(this.expert, {super.key});
+
+  static IconData joinIcon(JoinedVia j) =>
+      j == JoinedVia.acapsInvite ? Icons.verified_user_outlined : Icons.handshake_outlined;
+
+  static IconData activityIcon(Activity a) => switch (a) {
+        Activity.newcomer => Icons.fiber_new_outlined,
+        Activity.active => Icons.bolt,
+        Activity.established => Icons.workspace_premium_outlined,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final a = appState.expertActivity(expert);
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: [
+        Tooltip(
+          message: expert.joinedVia == JoinedVia.acapsInvite
+              ? 'Joined with a single-use invite link from an ACAPS moderator'
+              : 'Joined with the referral link of an expert already in the group',
+          child: Pill(expert.joinedVia.label, icon: joinIcon(expert.joinedVia)),
+        ),
+        Tooltip(message: a.why, child: Pill(a.label, icon: activityIcon(a))),
+      ],
+    );
+  }
+}
+
 enum _ExpertSort { points, accuracy, answers, name }
 
 extension on _ExpertSort {
@@ -2169,6 +2206,9 @@ class _ExpertsTabState extends State<_ExpertsTab> {
   String? _country;
   _ExpertSort _sort = _ExpertSort.points;
 
+  /// Filter by how experts joined (null = everyone).
+  JoinedVia? _joined;
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(listenable: appState, builder: (context, _) => _build(context));
 
@@ -2178,6 +2218,7 @@ class _ExpertsTabState extends State<_ExpertsTab> {
     final q = _q.toLowerCase();
     final rows = appState.experts
         .where((e) => _country == null || e.inPanel(_country!))
+        .where((e) => _joined == null || e.joinedVia == _joined)
         .where((e) => q.isEmpty || '${displayName(e, Viewer.moderator)} ${e.pseudonym} ${e.homeCountry}'.toLowerCase().contains(q))
         .map((e) => (e, appState.statsOf(e), appState.responsesOf(e).length))
         .toList()
@@ -2241,6 +2282,22 @@ class _ExpertsTabState extends State<_ExpertsTab> {
             ),
           ],
         ),
+        const SizedBox(height: 10),
+        // The door check: how experts got in (moderators only).
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: [
+            ChoiceChip(label: const Text('Everyone'), selected: _joined == null, onSelected: (_) => setState(() => _joined = null)),
+            for (final j in JoinedVia.values)
+              ChoiceChip(
+                avatar: Icon(TrustPills.joinIcon(j), size: 16),
+                label: Text(j.label),
+                selected: _joined == j,
+                onSelected: (_) => setState(() => _joined = _joined == j ? null : j),
+              ),
+          ],
+        ),
         // Panel size for the chosen country. Invites: the link button in the top bar.
         if (_country != null)
           Padding(
@@ -2265,8 +2322,15 @@ class _ExpertsTabState extends State<_ExpertsTab> {
             child: ListTile(
               leading: Avatar(displayName(e, Viewer.moderator), size: 36),
               title: Text(displayName(e, Viewer.moderator)),
-              subtitle: Text('L${e.level.number} · ${e.countries.join(', ')} · $answers answers'
-                  '${st.brier == null ? '' : ' · accuracy ${accuracyPct(st.brier!)}%'}'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('L${e.level.number} · ${e.countries.join(', ')} · $answers answers'
+                      '${st.brier == null ? '' : ' · accuracy ${accuracyPct(st.brier!)}%'}'),
+                  const SizedBox(height: 4),
+                  TrustPills(e),
+                ],
+              ),
               trailing: Text('${st.points}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
               onTap: () => _showExpert(context, e),
             ),
@@ -2306,6 +2370,15 @@ void _showExpert(BuildContext context, Expert e) {
                   ),
                 ),
               ],
+            ),
+            const SectionLabel('Trust', padding: EdgeInsets.only(top: 16, bottom: 6)),
+            TrustPills(e),
+            const SizedBox(height: 4),
+            Text(
+              '${e.joinedVia == JoinedVia.acapsInvite ? 'Joined with a single-use invite link from an ACAPS moderator.' : 'Joined with the referral link of an expert already in the group.'} '
+              '${appState.expertActivity(e).why}. '
+              'Neither says who they are; only moderators see this.',
+              style: t.bodySmall,
             ),
             const SizedBox(height: 12),
             Wrap(
