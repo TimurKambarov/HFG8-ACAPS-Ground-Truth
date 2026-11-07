@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
 import 'package:flutter/services.dart';
 
+import '../auth.dart';
 import '../models.dart';
 import '../store.dart';
 import '../download.dart';
@@ -148,7 +150,7 @@ class _ModeratorShellState extends State<ModeratorShell> {
               ],
             ),
             actions: [
-              IconButton(tooltip: 'Invite an expert (single-use link)', onPressed: () => showInviteSheet(context), icon: const Icon(Icons.link)),
+              IconButton(tooltip: 'Invite an expert (single-use code)', onPressed: () => showInviteSheet(context), icon: const Icon(Icons.vpn_key_outlined)),
               if (me != null)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
@@ -264,7 +266,7 @@ class _InboxTabState extends State<_InboxTab> {
           Text(
             'These countries have active risks but not enough experts. With none, nobody can answer. '
             'With 1 or 2, group results could reveal who answered, so at least $minPanel are needed. '
-            'Create a personal invite link for a trusted contact with the link button at the top.',
+            'Create a personal invite code for a trusted contact with the key button at the top.',
             style: t.bodyMedium,
           ),
           if (inbox.empty.isNotEmpty)
@@ -358,48 +360,76 @@ class _CountryGroupState extends State<_CountryGroup> {
   }
 }
 
-/// The moderator's invite button: generates a new single-use link straight
+/// The moderator's invite button: creates a new single-use code straight
 /// away (no country to pick: the expert chooses theirs when creating their
-/// profile), and lists all links.
+/// profile), and lists all codes. With a real moderator account the codes
+/// live on the server, so they work on any device.
 void showInviteSheet(BuildContext context) {
-  // Generated on the tap itself (not while the dialog builds).
-  final link = appState.createInvite();
   showDialog<void>(
     context: context,
     builder: (_) => Dialog(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 440),
-        child: _InviteSheet(first: link),
+        child: const _InviteSheet(),
       ),
     ),
   );
 }
 
-/// Ready-to-send invitation text with the personal link.
+/// Ready-to-send invitation text with the personal code. There is no
+/// installed app yet, so the person types the code on the start screen.
 String inviteMessage(Invite i) =>
     'You are invited to join the ACAPS Ground Truth expert group: a few minutes a month to '
     'ground-truth ACAPS risk analysis, at the level of anonymity you choose.\n\n'
-    'Your personal link (works once, please do not share it): ${inviteLink(i.code)}';
+    'Your personal invite code: ${i.code}\n'
+    'Open the app, tap "I have a code" and type it in. It works once, so please do not share it.';
 
 class _InviteSheet extends StatefulWidget {
-  /// The link generated when the button was tapped.
-  final Invite first;
-  const _InviteSheet({required this.first});
+  const _InviteSheet();
 
   @override
   State<_InviteSheet> createState() => _InviteSheetState();
 }
 
-/// Opens with a freshly generated link, ready to copy; below, every link
+/// Opens with a freshly created code, ready to copy; below, every code
 /// with its status (open, used, cancelled).
 class _InviteSheetState extends State<_InviteSheet> {
-  late Invite _link = widget.first;
+  Invite? _invite;
+  String? _error;
+  bool _busy = true; // a code is created as soon as the sheet opens
   final _note = TextEditingController();
+  Timer? _noteTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // After the first frame: creating a code notifies the app state, which
+    // must not happen while the dialog is being built.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _create();
+    });
+  }
 
   @override
   void dispose() {
+    _flushNote();
     _note.dispose();
     super.dispose();
+  }
+
+  Future<void> _create() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final i = await appState.newInvite();
+      if (mounted) setState(() => _invite = i);
+    } catch (e) {
+      if (mounted) setState(() => _error = explain(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   void _copy(String text, String what) {
@@ -408,109 +438,153 @@ class _InviteSheetState extends State<_InviteSheet> {
   }
 
   void _another() {
+    _flushNote();
     _note.clear();
-    setState(() => _link = appState.createInvite());
+    _create();
+  }
+
+  /// The note is saved shortly after typing stops (one server call, not
+  /// one per key).
+  void _noteChanged(String v) {
+    final i = _invite;
+    if (i == null) return;
+    i.note = v.trim();
+    _noteTimer?.cancel();
+    _noteTimer = Timer(const Duration(milliseconds: 700), _flushNote);
+  }
+
+  void _flushNote() {
+    final t = _noteTimer, i = _invite;
+    _noteTimer = null;
+    if (t == null || i == null) return;
+    t.cancel();
+    appState.saveInviteNote(i, _note.text).catchError((_) {});
+  }
+
+  Future<void> _cancel(Invite i) async {
+    try {
+      await appState.cancelInvite(i);
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(explain(e))));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    final list = appState.invitesNewestFirst;
-    final open = list.where((i) => i.open).length;
-    final used = list.where((i) => i.used).length;
-    final cancelled = list.where((i) => i.revoked).length;
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
+    final invite = _invite;
+    return ListenableBuilder(
+      listenable: appState,
+      builder: (context, _) {
+        final list = appState.invitesNewestFirst;
+        final open = list.where((i) => i.open).length;
+        final used = list.where((i) => i.used).length;
+        final cancelled = list.where((i) => i.revoked).length;
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(width: 48),
-              Expanded(child: Text('New invite link', textAlign: TextAlign.center, style: t.titleLarge)),
-              IconButton(tooltip: 'Close', onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text('Personal and works once. ACAPS knows whom it invited; once inside, the expert chooses their '
-              'own anonymity and countries. A used link is never linked to the account.',
-              textAlign: TextAlign.center, style: t.bodySmall),
-          const SizedBox(height: 14),
-          // The link is the invitation and the authorisation: opening it lets
-          // that one person create a profile.
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
-            child: Row(
-              children: [
-                Icon(Icons.link, color: cs.primary),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: SelectableText(inviteLink(_link.code),
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 13.5, fontWeight: FontWeight.w700)),
+              Row(
+                children: [
+                  const SizedBox(width: 48),
+                  Expanded(child: Text('New invite code', textAlign: TextAlign.center, style: t.titleLarge)),
+                  IconButton(tooltip: 'Close', onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text('Personal and works once. ACAPS knows whom it invited; once inside, the expert chooses their '
+                  'own anonymity and countries. A used code is never linked to the account.',
+                  textAlign: TextAlign.center, style: t.bodySmall),
+              const SizedBox(height: 14),
+              // The code is the invitation and the authorisation: typing it in
+              // lets that one person create a profile.
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
+                child: Row(
+                  children: [
+                    Icon(Icons.vpn_key_outlined, color: cs.primary),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _busy
+                          ? const Align(
+                              alignment: Alignment.centerLeft,
+                              child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5)),
+                            )
+                          : invite == null
+                              ? Text(_error ?? 'No code yet.', style: TextStyle(color: cs.error))
+                              : SelectableText(invite.code,
+                                  style: const TextStyle(fontFamily: 'monospace', fontSize: 20, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          FilledButton.icon(
-            onPressed: () => _copy(inviteLink(_link.code), 'Invite link'),
-            icon: const Icon(Icons.copy, size: 18),
-            label: const Text('Copy link'),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            alignment: WrapAlignment.center,
-            children: [
-              OutlinedButton.icon(
-                onPressed: () => _copy(inviteMessage(_link), 'Invitation message'),
-                icon: const Icon(Icons.mail_outline, size: 18),
-                label: const Text('Copy invitation message'),
               ),
-              TextButton.icon(
-                onPressed: _another,
-                icon: const Icon(Icons.link, size: 18),
-                label: const Text('Another link'),
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: invite == null || _busy ? null : () => _copy(invite.code, 'Invite code'),
+                icon: const Icon(Icons.copy, size: 18),
+                label: const Text('Copy code'),
               ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: invite == null || _busy ? null : () => _copy(inviteMessage(invite), 'Invitation message'),
+                    icon: const Icon(Icons.mail_outline, size: 18),
+                    label: const Text('Copy invitation message'),
+                  ),
+                  TextButton.icon(
+                    onPressed: _busy ? null : _another,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: Text(invite == null ? 'Try again' : 'Another code'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _note,
+                enabled: invite != null && !_busy,
+                decoration: const InputDecoration(
+                  labelText: 'Who is it for? (optional, moderators only)',
+                  hintText: 'e.g. protection officer, Abéché',
+                  isDense: true,
+                ),
+                onChanged: _noteChanged,
+                onSubmitted: (_) => _flushNote(),
+              ),
+              const SectionLabel('Invite codes'),
+              Text('$open open · $used used${cancelled == 0 ? '' : ' · $cancelled cancelled'}', style: t.bodySmall),
+              for (final i in list) _InviteRow(invite: i, onCopy: () => _copy(i.code, 'Invite code'), onCancel: () => _cancel(i)),
             ],
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _note,
-            decoration: const InputDecoration(
-              labelText: 'Who is it for? (optional, moderators only)',
-              hintText: 'e.g. protection officer, Abéché',
-              isDense: true,
-            ),
-            onChanged: (v) => appState.setInviteNote(_link, v),
-          ),
-          const SectionLabel('Invite links'),
-          Text('$open open · $used used${cancelled == 0 ? '' : ' · $cancelled cancelled'}', style: t.bodySmall),
-          for (final i in list)
-            _InviteRow(invite: i, onCopy: () => _copy(inviteLink(i.code), 'Invite link'), onChanged: () => setState(() {})),
-        ],
-      ),
+        );
+      },
     );
   }
 }
 
-/// One invite link in the moderator's list.
+/// One invite code in the moderator's list.
 class _InviteRow extends StatelessWidget {
   final Invite invite;
   final VoidCallback onCopy;
-  final VoidCallback onChanged;
-  const _InviteRow({required this.invite, required this.onCopy, required this.onChanged});
+  final VoidCallback onCancel;
+  const _InviteRow({required this.invite, required this.onCopy, required this.onCancel});
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
     final i = invite;
-    final by = moderatorById(i.createdBy)?.shortName ?? 'a moderator';
+    final by = (i.createdByName == null ? null : Moderator(id: i.createdBy, name: i.createdByName!).shortName) ??
+        moderatorById(i.createdBy)?.shortName ??
+        'a moderator';
     final status = i.revoked
         ? 'Cancelled'
         : i.used
@@ -520,7 +594,7 @@ class _InviteRow extends StatelessWidget {
       contentPadding: EdgeInsets.zero,
       dense: true,
       leading: Icon(
-        i.open ? Icons.link : (i.used ? Icons.check_circle_outline : Icons.link_off),
+        i.open ? Icons.vpn_key_outlined : (i.used ? Icons.check_circle_outline : Icons.block),
         color: i.open ? cs.primary : cs.onSurfaceVariant,
       ),
       title: Text('${i.code} · $status', style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w700)),
@@ -528,14 +602,11 @@ class _InviteRow extends StatelessWidget {
       trailing: i.open
           ? Wrap(
               children: [
-                IconButton(tooltip: 'Copy link', onPressed: onCopy, icon: const Icon(Icons.copy, size: 18)),
+                IconButton(tooltip: 'Copy code', onPressed: onCopy, icon: const Icon(Icons.copy, size: 18)),
                 IconButton(
-                  tooltip: 'Cancel this link',
-                  onPressed: () {
-                    appState.revokeInvite(i);
-                    onChanged();
-                  },
-                  icon: Icon(Icons.link_off, size: 18, color: cs.error),
+                  tooltip: 'Cancel this code',
+                  onPressed: onCancel,
+                  icon: Icon(Icons.block, size: 18, color: cs.error),
                 ),
               ],
             )
@@ -1997,8 +2068,8 @@ class TrustPills extends StatelessWidget {
       children: [
         Tooltip(
           message: expert.joinedVia == JoinedVia.acapsInvite
-              ? 'Joined with a single-use invite link from an ACAPS moderator'
-              : 'Joined with the referral link of an expert already in the group',
+              ? 'Joined with a single-use invite code from an ACAPS moderator'
+              : 'Joined with the referral code of an expert already in the group',
           child: Pill(expert.joinedVia.label, icon: joinIcon(expert.joinedVia)),
         ),
         Tooltip(message: a.why, child: Pill(a.label, icon: activityIcon(a))),
@@ -2122,7 +2193,7 @@ class _ExpertsTabState extends State<_ExpertsTab> {
               ),
           ],
         ),
-        // Panel size for the chosen country. Invites: the link button in the top bar.
+        // Panel size for the chosen country. Invites: the key button in the top bar.
         if (_country != null)
           Padding(
             padding: const EdgeInsets.only(top: 10),
@@ -2199,7 +2270,7 @@ void _showExpert(BuildContext context, Expert e) {
             TrustPills(e),
             const SizedBox(height: 4),
             Text(
-              '${e.joinedVia == JoinedVia.acapsInvite ? 'Joined with a single-use invite link from an ACAPS moderator.' : 'Joined with the referral link of an expert already in the group.'} '
+              '${e.joinedVia == JoinedVia.acapsInvite ? 'Joined with a single-use invite code from an ACAPS moderator.' : 'Joined with the referral code of an expert already in the group.'} '
               '${appState.expertActivity(e).why}. '
               'Neither says who they are; only moderators see this.',
               style: t.bodySmall,
@@ -2213,7 +2284,7 @@ void _showExpert(BuildContext context, Expert e) {
                 Pill('${appState.responsesOf(e).length} answers', icon: Icons.how_to_vote_outlined),
                 Pill('${cm.length} comments · ${cm.where((c) => c.useful).length} useful', icon: Icons.forum_outlined),
                 if (appState.referralsBy(e) case final n when n > 0)
-                  Pill('$n ${n == 1 ? 'colleague' : 'colleagues'} joined via their link', icon: Icons.group_add_outlined),
+                  Pill('$n ${n == 1 ? 'colleague' : 'colleagues'} joined with their code', icon: Icons.group_add_outlined),
                 Pill('${st.points} points', icon: Icons.emoji_events_outlined),
                 if (st.brier != null) Pill('accuracy ${accuracyPct(st.brier!)}%', icon: Icons.track_changes),
                 if (!e.onRating) const Pill('not in rating', icon: Icons.visibility_off_outlined),
@@ -2316,8 +2387,8 @@ class _ModProfileTabState extends State<_ModProfileTab> {
         const SectionLabel('Account'),
         OutlinedButton.icon(
           onPressed: appState.signOut,
-          icon: const Icon(Icons.switch_account_outlined),
-          label: const Text('Switch user'),
+          icon: Icon(appState.sessionAccountId != null ? Icons.logout : Icons.switch_account_outlined),
+          label: Text(appState.sessionAccountId != null ? 'Log out' : 'Switch user'),
         ),
         const SizedBox(height: 8),
         if (!_confirmReset)

@@ -830,8 +830,7 @@ class _RatingTabState extends State<RatingTab> {
             _PointsRow(icon: Icons.push_pin_outlined, text: '+${Points.usedComment}: your comment is used in the analysis of another risk'),
             _PointsRow(
               icon: Icons.group_add_outlined,
-              text: '+${Points.referral}: a colleague joins with your referral link (Profile). '
-                  'Demo: when they register. Pilot: once they have answered ${Points.referralAnswersInPilot} risks.',
+              text: '+${Points.referral}: a colleague signs up with your referral code (Profile).',
             ),
             const SectionLabel('Badges'),
             for (final b in Award.values)

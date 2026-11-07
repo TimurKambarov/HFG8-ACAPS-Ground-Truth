@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'auth.dart';
 import 'csv.dart';
 import 'identity.dart';
 import 'models.dart';
@@ -12,7 +13,10 @@ import 'models.dart';
 export 'identity.dart';
 
 /// A new random invite code, e.g. "GT-7Q4X-K9MB" (no 0/O/1/I to misread).
-/// Referral links use the prefix "REF".
+/// Referral codes use the prefix "REF". Demo mode only: with real accounts
+/// the server makes the codes (same format, see the referrals migration).
+/// There is no installed app yet, so people share codes, not links: the
+/// new member types the code on the start screen.
 String newInviteCode([Random? rnd, String prefix = 'GT']) {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   final r = rnd ?? Random.secure();
@@ -20,14 +24,8 @@ String newInviteCode([Random? rnd, String prefix = 'GT']) {
   return '$prefix-${part()}-${part()}';
 }
 
-/// The link a token opens: this app with ?invite=<token>. Used for the
-/// moderators' single-use invites and the experts' permanent referral links.
-/// Opening it is the authorisation to create a profile.
-String inviteLink(String code) {
-  final b = Uri.base;
-  return Uri(scheme: b.scheme, host: b.host, port: b.hasPort ? b.port : null, path: b.path, queryParameters: {'invite': code})
-      .toString();
-}
+/// A real (Supabase) account id, as opposed to a local demo id like "p1".
+bool isAccountId(String id) => id.length == 36 && id.split('-').length == 5;
 
 /// Brier score of a forecast on the ACAPS scale (1..5): squared gap between
 /// its probability (the middle of the ACAPS range) and what happened.
@@ -39,8 +37,8 @@ class Points {
   static const usefulComment = 25;
   static const usedComment = 50;
 
-  /// A colleague joined through your referral link. Demo: as soon as they
-  /// register. Pilot: once they have answered [referralAnswersInPilot] risks.
+  /// A colleague signed up with your referral code (counted at sign-up).
+  /// [referralAnswersInPilot] is the goal of the progress stages.
   static const referral = 100;
   static const referralAnswersInPilot = 3;
   static int forecast(double brier) => (100 * (1 - brier)).round();
@@ -90,7 +88,11 @@ const moderators = [
   Moderator(id: 'm3', name: 'Mei Tanaka'),
 ];
 
-Moderator? moderatorById(String? id) => moderators.where((m) => m.id == id).firstOrNull;
+/// Real moderator accounts seen on this device (Supabase user id -> name).
+final Map<String, Moderator> accountModerators = {};
+
+Moderator? moderatorById(String? id) =>
+    moderators.where((m) => m.id == id).firstOrNull ?? (id == null ? null : accountModerators[id]);
 
 enum AppTheme { system, light, dark, contrast }
 
@@ -115,7 +117,7 @@ const minResolvedForBrier = 3;
 
 enum Award { superEstimator, usefulInsight, cited, regular, referralMaster }
 
-/// Colleagues who must have joined through your referral link for the
+/// Colleagues who must have joined with your referral code for the
 /// Referral Master badge.
 const referralMasterMin = 3;
 
@@ -133,7 +135,7 @@ extension AwardText on Award {
         Award.usefulInsight => 'A moderator marked your comment as useful',
         Award.cited => 'Your comment was used in the analysis of another risk',
         Award.regular => 'Answered 5 or more risk surveys',
-        Award.referralMaster => 'Invited $referralMasterMin or more experts who joined the community with your referral link',
+        Award.referralMaster => 'Invited $referralMasterMin or more experts who joined the community with your referral code',
       };
 }
 
@@ -326,33 +328,40 @@ class AppState extends ChangeNotifier {
   }
 
   // ---- session (persisted) ----
-  /// Country suggested by the invite link that was opened (may be null).
+  /// Country suggested by the code that was entered (may be null).
   String? invitePanel;
 
-  /// The single-use invite this person opened; used up when they register.
+  /// Demo mode: the local code this person entered; a single-use invite is
+  /// used up when they register.
   String? pendingInviteCode;
 
-  /// Why the last invite link did not work (shown on the sign-in screen).
-  InviteStatus? inviteError;
+  /// Real accounts: the code the server accepted, until the sign-up is done.
+  CodeCheck? pendingCode;
 
-  /// "Log in" pressed on the start screen: existing members sign in without
-  /// an invite link. Not persisted.
+  /// "Log in" pressed on the start screen (demo mode: the list of demo
+  /// users). Not persisted.
   bool showLogin = false;
 
-  /// A valid, unused invite link was opened: go straight to the profile form.
+  /// A valid code was entered: go to the sign-up form.
   bool get canRegister {
+    if (pendingCode != null) return true;
     final code = pendingInviteCode;
     if (code == null) return false;
     final i = inviteByCode(code);
     return (i != null && i.open) || referrerByCode(code) != null;
   }
 
-  /// The expert whose referral link was opened, if the pending link is one.
+  /// Demo mode: the expert whose referral code was entered, if it is one.
   Expert? get pendingReferrer => pendingInviteCode == null ? null : referrerByCode(pendingInviteCode!);
 
-  /// The log-in screen: after "Log in", or when an opened link did not work
-  /// (it says why). The start screen shows "Register" and "Log in".
-  bool get atSignIn => showLogin || inviteError != null;
+  /// The code entered is a colleague's referral code (not an ACAPS invite).
+  bool get pendingIsReferral => pendingCode?.isReferral ?? pendingReferrer != null;
+
+  /// The code entered makes an ACAPS moderator account.
+  bool get pendingIsModerator => pendingCode?.isModerator ?? false;
+
+  /// Demo mode: the list of demo users to log in as.
+  bool get atSignIn => showLogin;
 
   void openLogin() {
     showLogin = true;
@@ -364,9 +373,10 @@ class AppState extends ChangeNotifier {
     showLogin = false;
     invitePanel = null;
     pendingInviteCode = null;
-    inviteError = null;
+    pendingCode = null;
     _changed();
   }
+
   String? sessionExpertId;
   String? sessionModeratorId;
 
@@ -395,6 +405,7 @@ class AppState extends ChangeNotifier {
       }
       _restoreUi();
       if (!_restore()) _seed();
+      checkAccountSession();
     } catch (e) {
       error = '$e';
     }
@@ -412,33 +423,41 @@ class AppState extends ChangeNotifier {
 
   bool get signedIn => sessionModerator || me != null;
 
-  // ---- single-use invites (persisted) ----
+  // ---- codes: one entry point for both modes ----
+
+  /// "I have a code" on the start screen. With real accounts the server
+  /// checks it; in demo mode the local codes. A valid code opens the sign-up
+  /// form. Checking does not use a code up: only joining does.
+  Future<InviteStatus> enterCode(String typed) async {
+    if (!Auth.ready) return redeemInvite(typed);
+    final r = await Auth.checkCode(typed);
+    if (r.code != null) {
+      pendingCode = r.code;
+      invitePanel = r.code!.panel;
+      pendingInviteCode = null;
+      showLogin = false;
+      _changed();
+    }
+    return r.status;
+  }
+
+  // ---- single-use invites (persisted; demo mode) ----
   List<Invite> invites = [];
 
   Invite? inviteByCode(String code) {
-    final c = code.trim().toUpperCase();
+    final c = cleanCode(code);
     return invites.where((i) => i.code == c).firstOrNull;
   }
 
-  /// The invite token in a link (".../?invite=GT-7Q4X-K9MB"), or the text
-  /// itself when it is just the token.
-  static String inviteToken(String linkOrCode) {
-    final s = linkOrCode.trim();
-    final fromLink = RegExp(r'[?&]invite=([^&#\s]+)').firstMatch(s)?.group(1);
-    return Uri.decodeComponent(fromLink ?? s);
-  }
-
-  /// Opens an invite link (the app starts with ?invite=<token>). The link is
-  /// the authorisation: each works once, and is used up when the person
-  /// creates their profile. There is no field to paste links into: new
-  /// members only get in by opening the link they were sent.
-  InviteStatus redeemInvite(String linkOrCode) {
-    final token = inviteToken(linkOrCode);
-    // An expert's referral link: permanent, works for any number of colleagues.
+  /// Demo mode: checks a typed code against the local codes. A moderator's
+  /// invite works once and is used up when the person registers; an expert's
+  /// referral code works for any number of colleagues.
+  InviteStatus redeemInvite(String typed) {
+    final token = cleanCode(typed);
     if (referrerByCode(token) case final ref?) {
-      inviteError = null;
       invitePanel = null;
       pendingInviteCode = ref.referralCode;
+      showLogin = false;
       _changed();
       return InviteStatus.ok;
     }
@@ -450,31 +469,47 @@ class AppState extends ChangeNotifier {
             : i.used
                 ? InviteStatus.used
                 : InviteStatus.ok;
-    inviteError = status == InviteStatus.ok ? null : status;
     if (status == InviteStatus.ok) {
       invitePanel = i!.country;
       pendingInviteCode = i.code;
+      showLogin = false;
+      _changed();
     }
-    _changed();
     return status;
   }
 
-  // ---- referral links (persisted) ----
-  /// Who joined through whose referral link (never which account joined).
+  // ---- referral codes ----
+  /// Demo mode: who joined with whose referral code (persisted).
   List<Referral> referrals = [];
 
+  /// Real accounts: when colleagues joined with my code (from the server).
+  List<DateTime>? _accountReferrals;
+
+  /// Real accounts, moderators: colleagues joined per expert account.
+  Map<String, int> _remoteReferralCounts = {};
+
   Expert? referrerByCode(String code) {
-    final c = code.trim().toUpperCase();
+    final c = cleanCode(code);
     if (c.isEmpty) return null;
     return experts.where((e) => e.referralCode == c).firstOrNull;
   }
 
-  /// Colleagues who joined through [e]'s referral link.
-  int referralsBy(Expert e) => referrals.where((r) => r.referrerId == e.id).length;
+  /// Colleagues who joined with [e]'s referral code.
+  int referralsBy(Expert e) {
+    if (e.id == sessionAccountId && _accountReferrals != null) return _accountReferrals!.length;
+    return _remoteReferralCounts[e.id] ?? referrals.where((r) => r.referrerId == e.id).length;
+  }
 
-  /// Progress of each colleague who joined through [e]'s link, oldest first:
-  /// only the number of risks answered and the stage, nothing else.
-  List<({int answered, ReferralStage stage})> referralProgress(Expert e) {
+  /// Progress of each colleague who joined with [e]'s code, oldest first:
+  /// only the number of risks answered and the stage, nothing else. For real
+  /// accounts the server only says when they joined ([tracked] false):
+  /// answers are not in the shared database yet.
+  List<({int answered, ReferralStage stage, DateTime joinedAt, bool tracked})> referralProgress(Expert e) {
+    if (e.id == sessionAccountId && _accountReferrals != null) {
+      return [
+        for (final d in _accountReferrals!) (answered: 0, stage: ReferralStage.joined, joinedAt: d, tracked: false),
+      ];
+    }
     final mine = referrals.where((r) => r.referrerId == e.id).toList()..sort((a, b) => a.joinedAt.compareTo(b.joinedAt));
     return [
       for (final r in mine)
@@ -488,17 +523,20 @@ class AppState extends ChangeNotifier {
                 : n >= 1
                     ? ReferralStage.firstRisk
                     : ReferralStage.joined,
+            joinedAt: r.joinedAt,
+            tracked: true,
           );
         }(),
     ];
   }
 
-  /// Every expert gets a permanent referral link. Called when experts are
-  /// created or loaded, never while a screen is being built.
+  /// Every demo expert gets a permanent referral code. Called when experts
+  /// are created or loaded, never while a screen is being built. Real
+  /// accounts get theirs from the server instead.
   /// Returns whether any code was new (then it must be saved: a referral
-  /// link is permanent and must never change).
+  /// code is permanent and must never change).
   bool _ensureReferralCodes([Random? rnd]) {
-    final missing = experts.where((e) => e.referralCode.isEmpty).toList();
+    final missing = experts.where((e) => e.referralCode.isEmpty && !isAccountId(e.id)).toList();
     for (final e in missing) {
       String code;
       do {
@@ -509,22 +547,8 @@ class AppState extends ChangeNotifier {
     return missing.isNotEmpty;
   }
 
-  /// The invite link this device last opened (persisted), so reloading the
-  /// same link does not sign the new member out again.
-  String? lastOpenedInvite;
-
-  /// The app was opened with an invite link: whoever was signed in on this
-  /// device is signed out (a new person is joining), then the link is checked.
-  InviteStatus openInviteLink(String linkOrCode) {
-    lastOpenedInvite = linkOrCode;
-    sessionExpertId = null;
-    sessionModeratorId = null;
-    showLogin = false;
-    return redeemInvite(linkOrCode);
-  }
-
-  /// A moderator creates a new single-use link for one person. No country:
-  /// the new expert chooses theirs when creating their profile.
+  /// Demo mode: a moderator creates a new single-use code for one person.
+  /// No country: the new expert chooses theirs when creating their profile.
   Invite createInvite({String note = '', String? country}) {
     String code;
     do {
@@ -542,7 +566,7 @@ class AppState extends ChangeNotifier {
     return i;
   }
 
-  /// "Who is it for", moderators only.
+  /// "Who is it for", moderators only (demo mode).
   void setInviteNote(Invite i, String note) {
     i.note = note.trim();
     _changed();
@@ -553,33 +577,173 @@ class AppState extends ChangeNotifier {
     _changed();
   }
 
-  /// All invite links, newest first.
-  List<Invite> get invitesNewestFirst => [...invites]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  // ---- invite codes: one entry point for both modes (moderators) ----
+
+  /// The signed-in moderator uses the server's codes (a real account).
+  bool get _serverInvites => sessionModerator && sessionAccountId != null && Auth.ready;
+
+  /// Real accounts: the server's invite codes, newest first (null until loaded).
+  List<Invite>? remoteInvites;
+
+  /// A new single-use code: on the server for a real moderator account,
+  /// otherwise local. Throws when the server refuses; see [explain].
+  Future<Invite> newInvite({String note = ''}) async {
+    if (!_serverInvites) return createInvite(note: note);
+    final code = await Auth.createInvite(note: note);
+    await _reloadInvites();
+    return remoteInvites?.where((i) => i.code == code).firstOrNull ??
+        Invite(code: code, createdBy: sessionAccountId!, createdByName: moderator?.name, createdAt: DateTime.now(), note: note);
+  }
+
+  Future<void> saveInviteNote(Invite i, String note) async {
+    if (!_serverInvites) return setInviteNote(i, note);
+    i.note = note.trim();
+    await Auth.setInviteNote(i.code, note);
+  }
+
+  Future<void> cancelInvite(Invite i) async {
+    if (!_serverInvites) return revokeInvite(i);
+    await Auth.revokeInvite(i.code);
+    i.revoked = true;
+    await _reloadInvites();
+  }
+
+  Future<void> _reloadInvites() async {
+    remoteInvites = await Auth.listInvites();
+    notifyListeners();
+  }
+
+  /// All invite codes, newest first.
+  List<Invite> get invitesNewestFirst =>
+      _serverInvites ? [...?remoteInvites] : ([...invites]..sort((a, b) => b.createdAt.compareTo(a.createdAt)));
 
   /// For the demo "Register" button: an open invite, Chad first.
   Invite? get demoInvite =>
       invites.where((i) => i.open && i.country == 'Chad').firstOrNull ?? invites.where((i) => i.open).firstOrNull;
 
+  // ---- signing in ----
+
   void signInAs(Expert e) {
     sessionExpertId = e.id;
     sessionModeratorId = null;
+    sessionAccountId = null;
     _changed();
   }
 
   void signInModerator([String id = 'm1']) {
     sessionExpertId = null;
     sessionModeratorId = moderatorById(id)?.id ?? moderators.first.id;
+    sessionAccountId = null;
     _changed();
   }
 
-  /// "Switch user": back to the log-in screen.
-  void signOut() {
+  /// Supabase user id when signed in with a real account, null for demo users.
+  String? sessionAccountId;
+
+  /// Why the last refresh from the server failed (null when it worked).
+  String? accountSyncError;
+
+  /// After a real login or sign-up (see auth.dart). An expert gets a local
+  /// record keyed by their Supabase user id, created from their profile row
+  /// the first time; answers and points stay local. Then the referral code,
+  /// referrals and (moderators) invite codes are loaded from the server.
+  void signInAccount(AccountProfile p) {
+    if (p.isModerator) {
+      accountModerators[p.userId] = Moderator(id: p.userId, name: p.realName ?? 'ACAPS moderator');
+      sessionExpertId = null;
+      sessionModeratorId = p.userId;
+    } else {
+      if (expertById(p.userId) == null) {
+        final home = p.homeCountry ?? invitePanel ?? 'Chad';
+        experts.add(Expert(
+          id: p.userId,
+          joinedVia: p.joinedVia,
+          realName: p.realName,
+          pseudonym: p.pseudonym,
+          level: p.level,
+          homeCountry: home,
+          interests: {...p.interests}..remove(home),
+          onRating: p.onRating,
+          notifications: p.notifications,
+          hideFromOtherCountries: p.hideFromOtherCountries,
+        ));
+      }
+      sessionExpertId = p.userId;
+      sessionModeratorId = null;
+    }
+    sessionAccountId = p.userId;
+    pendingCode = null;
+    pendingInviteCode = null;
+    invitePanel = null;
+    showLogin = false;
+    _accountReferrals = null;
+    _remoteReferralCounts = {};
+    remoteInvites = null;
+    _changed();
+    refreshAccount();
+  }
+
+  /// Loads what lives on the server for the signed-in account. Never throws:
+  /// the reason is kept in [accountSyncError].
+  Future<void> refreshAccount() async {
+    final id = sessionAccountId;
+    if (id == null || !Auth.ready) return;
+    try {
+      if (sessionModerator) {
+        final invites = await Auth.listInvites();
+        final counts = await Auth.referralCounts();
+        if (sessionAccountId != id) return; // signed out meanwhile
+        remoteInvites = invites;
+        _remoteReferralCounts = counts;
+      } else {
+        final code = await Auth.myReferralCode();
+        final joined = await Auth.myReferrals();
+        if (sessionAccountId != id) return;
+        final e = expertById(id);
+        if (e != null && code != null) e.referralCode = code;
+        _accountReferrals = joined;
+      }
+      accountSyncError = null;
+    } catch (e) {
+      if (sessionAccountId != id) return;
+      accountSyncError = explain(e);
+    }
+    _changed();
+  }
+
+  /// At launch: drop a saved account session that Supabase no longer has
+  /// (logged out, expired, or a build without the Supabase keys). With real
+  /// accounts available, a leftover demo session is closed too: everyone
+  /// logs in with a password then.
+  void checkAccountSession() {
+    if (sessionAccountId != null && sessionAccountId != Auth.currentUserId) {
+      _clearSession();
+    } else if (Auth.ready && sessionAccountId == null && signedIn) {
+      _clearSession();
+    }
+  }
+
+  void _clearSession() {
     sessionExpertId = null;
     sessionModeratorId = null;
-    showLogin = true;
-    _changed();
+    sessionAccountId = null;
+    _accountReferrals = null;
+    _remoteReferralCounts = {};
+    remoteInvites = null;
+    accountSyncError = null;
   }
 
+  /// "Log out" / "Switch user". Demo mode: back to the list of demo users.
+  /// Real accounts: ends the session and goes back to the start screen.
+  void signOut() {
+    final hadAccount = sessionAccountId != null;
+    _clearSession();
+    showLogin = !Auth.ready;
+    _changed();
+    if (hadAccount) Auth.signOut();
+  }
+
+  /// Demo mode: registers locally with the code entered on the start screen.
   Expert register({
     required Anonymity level,
     required String? realName,
@@ -590,13 +754,13 @@ class AppState extends ChangeNotifier {
     required bool onRating,
     bool hideFromOtherCountries = false,
   }) {
-    // The link is the authorisation: no profile without a valid, unused
-    // moderator invite or a colleague's referral link (a real backend checks
-    // this on the server too).
+    // The code is the authorisation: no profile without a valid, unused
+    // moderator invite or a colleague's referral code (with real accounts
+    // the server checks this, see registerAccount).
     final invite = pendingInviteCode == null ? null : inviteByCode(pendingInviteCode!);
     final referrer = pendingReferrer;
     if ((invite == null || !invite.open) && referrer == null) {
-      throw StateError('A new profile needs a valid invite or referral link.');
+      throw StateError('A new profile needs a valid invite or referral code.');
     }
     // A unique id, even for two registrations in the same instant.
     var id = 'u${DateTime.now().microsecondsSinceEpoch}';
@@ -617,20 +781,57 @@ class AppState extends ChangeNotifier {
       hideFromOtherCountries: hideFromOtherCountries,
     );
     experts.add(e);
-    _ensureReferralCodes(); // the new member gets their own referral link
+    _ensureReferralCodes(); // the new member gets their own referral code
     if (invite != null && invite.open) {
       // A moderator's invite is now used up. It records only WHEN, never
       // which account, so a fully anonymous expert cannot be traced through it.
       invite.usedAt = DateTime.now();
     } else if (referrer != null) {
-      // A colleague's referral link stays valid. The inviter earns
-      // Points.referral (demo: on registration) and can follow the new
-      // member's progress (stage only; they were told when joining).
+      // A colleague's referral code stays valid. The inviter earns
+      // Points.referral on sign-up and can follow the new member's progress
+      // (stage only; they were told when joining).
       referrals.add(Referral(referrer.id, DateTime.now(), e.id));
     }
     pendingInviteCode = null;
     signInAs(e);
     return e;
+  }
+
+  /// Real accounts: creates the expert account on the server with the code
+  /// the server accepted, then signs in. Throws on failure; see [explain].
+  Future<void> registerAccount({
+    required String password,
+    required Anonymity level,
+    required String? realName,
+    required String pseudonym,
+    required String homeCountry,
+    required Set<String> interests,
+    required bool notifications,
+    required bool onRating,
+    bool hideFromOtherCountries = false,
+  }) async {
+    final code = pendingCode;
+    if (code == null) throw StateError('Enter your invite or referral code first.');
+    final p = await Auth.signUpExpert(
+      code: code,
+      pseudonym: pseudonym,
+      password: password,
+      level: level,
+      realName: level.needsRealName ? realName : null,
+      homeCountry: homeCountry,
+      interests: interests,
+      notifications: notifications,
+      onRating: onRating,
+      hideFromOtherCountries: hideFromOtherCountries,
+    );
+    signInAccount(p);
+  }
+
+  /// Real accounts: creates a moderator account with a moderator code.
+  Future<void> registerModerator({required String realName, required String email, required String password}) async {
+    final code = pendingCode;
+    if (code == null || !code.isModerator) throw StateError('Enter a moderator code first.');
+    signInAccount(await Auth.signUpModerator(code: code, realName: realName, email: email, password: password));
   }
 
   void updateMe(void Function(Expert e) f) {
@@ -643,12 +844,13 @@ class AppState extends ChangeNotifier {
 
   Future<void> resetDemo() async {
     await _prefs?.remove(_prefsKey);
+    final hadAccount = sessionAccountId != null;
     invitePanel = null;
     pendingInviteCode = null;
-    inviteError = null;
+    pendingCode = null;
     showLogin = false;
-    sessionExpertId = null;
-    sessionModeratorId = null;
+    _clearSession();
+    if (hadAccount) Auth.signOut();
     _bannerDismissed.clear();
     autoOpened.clear(); // a reset demo shows the entry pop-up again
     risks.removeWhere((r) => r.custom);
@@ -1424,11 +1626,12 @@ class AppState extends ChangeNotifier {
         'skipped': {for (final e in _skipped.entries) e.key: e.value.toList()},
         'invite': invitePanel,
         'invite_code': pendingInviteCode,
-        'last_invite': lastOpenedInvite,
         'invites': [for (final i in invites) i.toJson()],
         'referrals': [for (final r in referrals) r.toJson()],
         'session': sessionExpertId,
         'moderator': sessionModeratorId,
+        'account': sessionAccountId,
+        if (accountModerators[sessionModeratorId] case final m?) 'account_moderator_name': m.name,
       }),
     );
   }
@@ -1455,16 +1658,20 @@ class AppState extends ChangeNotifier {
         });
       invitePanel = m['invite'] as String?;
       pendingInviteCode = m['invite_code'] as String?;
-      lastOpenedInvite = m['last_invite'] as String?;
       if (m['invites'] is List) {
         invites = [for (final i in m['invites'] as List) Invite.fromJson((i as Map).cast<String, dynamic>())];
       } else {
         _seedInvites(); // saved before single-use invites existed
       }
       referrals = [for (final r in (m['referrals'] as List? ?? const [])) Referral.fromJson((r as Map).cast<String, dynamic>())];
-      if (_ensureReferralCodes()) _save(); // saved before referral links existed: fix them now
+      if (_ensureReferralCodes()) _save(); // saved before referral codes existed: fix them now
       sessionExpertId = m['session'] as String?;
+      sessionAccountId = m['account'] as String?;
       final mod = m['moderator'];
+      // A real moderator account: its name, so the session can be restored.
+      if (sessionAccountId != null && mod == sessionAccountId && m['account_moderator_name'] is String) {
+        accountModerators[sessionAccountId!] = Moderator(id: sessionAccountId!, name: m['account_moderator_name'] as String);
+      }
       sessionModeratorId = mod == true ? moderators.first.id : moderatorById(mod is String ? mod : null)?.id;
       risks
         ..removeWhere((r) => r.custom)

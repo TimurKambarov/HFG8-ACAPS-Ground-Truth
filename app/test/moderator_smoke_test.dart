@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ground_truth/auth.dart';
 import 'package:ground_truth/main.dart';
 import 'package:ground_truth/models.dart';
 import 'package:ground_truth/screens/risk_filter.dart';
@@ -34,16 +35,17 @@ void main() {
       // No per-country invite buttons in the Inbox any more.
       expect(find.text('Invite'), findsNothing);
 
-      // The invite button at the top generates a single-use link straight away:
-      // no country to pick, no QR code.
+      // The invite button at the top creates a single-use code straight away:
+      // no country to pick, no QR code, no link (people type the code in).
       final before = appState.invites.length;
-      await tester.tap(find.byTooltip('Invite an expert (single-use link)'));
+      await tester.tap(find.byTooltip('Invite an expert (single-use code)'));
       await tester.pumpAndSettle();
       expect(appState.invites.length, before + 1);
-      expect(find.text('New invite link'), findsOneWidget);
-      expect(find.text('Copy link'), findsOneWidget);
+      expect(find.text('New invite code'), findsOneWidget);
+      expect(find.text('Copy code'), findsOneWidget);
       expect(find.text('Copy invitation message'), findsOneWidget);
-      expect(find.textContaining('?invite=GT-'), findsWidgets);
+      expect(find.textContaining(RegExp(r'^GT-[A-Z2-9]{4}-[A-Z2-9]{4}')), findsWidgets);
+      expect(find.textContaining('?invite='), findsNothing);
       expect(find.byType(DropdownMenu<String>), findsNothing);
       await tester.tapAt(const Offset(10, 10));
       await tester.pumpAndSettle();
@@ -85,9 +87,9 @@ void main() {
       }
 
       // Invite button in the app bar, on any tab.
-      await tester.tap(find.byTooltip('Invite an expert (single-use link)'));
+      await tester.tap(find.byTooltip('Invite an expert (single-use code)'));
       await tester.pumpAndSettle();
-      expect(find.text('New invite link'), findsOneWidget);
+      expect(find.text('New invite code'), findsOneWidget);
       await tester.tapAt(const Offset(10, 10));
       await tester.pumpAndSettle();
 
@@ -250,7 +252,7 @@ void main() {
     expect(s.byId('R1043')!.fromEarlierList, isFalse);
   });
 
-  testWidgets('start screen: Register goes straight to the profile form; Log in to existing users', (tester) async {
+  testWidgets('start screen: type a code to reach the profile form; Log in to existing users', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await tester.runAsync(() => appState.load());
     await appState.resetDemo();
@@ -260,11 +262,20 @@ void main() {
     await tester.pumpWidget(const GroundTruthApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('Register'), findsOneWidget);
+    // No installed app yet: people share codes, so there is a field to type one.
+    expect(find.text('I have a code'), findsOneWidget);
+    expect(find.text('Continue'), findsOneWidget);
+    expect(find.text('Register with a demo code'), findsOneWidget); // demo mode only
     expect(find.text('Log in'), findsOneWidget);
-    expect(find.byType(TextField), findsNothing); // no field to paste links or codes into
 
-    // Log in: existing members only, no way to create a profile without a link.
+    // A wrong code says why and stays on the start screen.
+    await tester.enterText(find.byType(TextField), 'GT-NOPE-NOPE');
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('This is not a valid code'), findsOneWidget);
+    expect(find.text('Your profile'), findsNothing);
+
+    // Log in: existing members only, no way to create a profile without a code.
     await tester.tap(find.text('Log in'));
     await tester.pumpAndSettle();
     expect(find.text('Harmattan-17'), findsOneWidget);
@@ -272,45 +283,87 @@ void main() {
     await tester.tap(find.text('Back to start'));
     await tester.pumpAndSettle();
 
-    // Register: straight to the profile form, no in-between page, no user list.
-    await tester.tap(find.text('Register'));
+    // A colleague's referral code, typed in lower case: straight to the profile form.
+    await tester.enterText(find.byType(TextField), appState.expertById('p2')!.referralCode.toLowerCase());
+    await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
     expect(find.text('Your profile'), findsOneWidget);
     expect(find.text('1. HOW VISIBLE DO YOU WANT TO BE?'), findsOneWidget);
+    expect(find.textContaining('invited by a colleague'), findsOneWidget);
+    expect(find.text('Password'), findsNothing); // demo mode: no passwords
     expect(find.text('Harmattan-17'), findsNothing);
-    expect(find.textContaining('Create my profile'), findsNothing);
 
     // Back returns to the start screen.
     await tester.tap(find.byTooltip('Back'));
     await tester.pumpAndSettle();
-    expect(find.text('Register'), findsOneWidget);
+    expect(find.text('I have a code'), findsOneWidget);
 
-    // Register for real (level 3 needs no name): the link is used up and the app opens.
+    // Register for real (level 3 needs no name): the invite is used up and the app opens.
     final open = appState.invites.where((i) => i.open).length;
-    await tester.tap(find.text('Register'));
+    await tester.tap(find.text('Register with a demo code'));
     await tester.pumpAndSettle();
+    expect(find.textContaining('Your invite code is valid'), findsOneWidget);
     await tester.tap(find.textContaining('Level 3'));
     await tester.pumpAndSettle();
     final join = find.text('Join the group');
     await tester.scrollUntilVisible(join, 200, scrollable: find.byType(Scrollable).first);
+    await tester.ensureVisible(join);
+    await tester.pumpAndSettle();
     await tester.tap(join);
     await tester.pumpAndSettle();
     expect(appState.me, isNotNull);
     expect(appState.invites.where((i) => i.open).length, open - 1);
   });
 
-  test('opening a new invite link signs out whoever is signed in on the device', () async {
+  test('without the Supabase keys, codes are checked locally', () async {
     SharedPreferences.setMockInitialValues({});
     final s = AppState();
     await s.load();
-    s.signInModerator('m1');
     final i = s.createInvite();
-    expect(s.openInviteLink('https://example.org/?invite=${i.code}'), InviteStatus.ok);
-    expect(s.signedIn, isFalse);
-    expect(s.canRegister, isTrue); // straight to the profile form
+    // Case and spaces do not matter.
+    expect(await s.enterCode('  ${i.code.toLowerCase()} '), InviteStatus.ok);
+    expect(s.canRegister, isTrue);
+    s.backToStart();
+    expect(await s.enterCode('REF-0000-0000'), InviteStatus.unknown);
+    expect(s.canRegister, isFalse);
   });
 
-  test('referral links: one permanent link per expert, +100 per colleague who joins', () async {
+  test('real accounts: a local record from the profile, no local referral code', () async {
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    const uid = '7f1c2a9e-3b4d-4e5f-8a6b-0c1d2e3f4a5b';
+    expect(isAccountId(uid), isTrue);
+    expect(isAccountId('p1'), isFalse);
+    s.signInAccount(const AccountProfile(
+      userId: uid, isModerator: false, pseudonym: 'Sahel-Owl', realName: null, anonymity: 'anonymous',
+      homeCountry: 'Niger', interests: ['Chad'], onRating: true, notifications: true, hideFromOtherCountries: false,
+      joinedVia: JoinedVia.expertReferral,
+    ));
+    expect(s.me?.id, uid);
+    expect(s.me?.joinedVia, JoinedVia.expertReferral);
+    expect(s.me?.homeCountry, 'Niger');
+    expect(s.sessionAccountId, uid);
+    // Its referral code comes from the server, never a made-up local one.
+    expect(s.me?.referralCode, isEmpty);
+
+    // A real moderator account gets its name for signed reviews.
+    const mod = '0a1b2c3d-4e5f-4a6b-9c8d-7e6f5a4b3c2d';
+    s.signInAccount(const AccountProfile(
+      userId: mod, isModerator: true, pseudonym: 'ACAPS-0a1b2c', realName: 'Jane Doe', anonymity: 'known_to_acaps',
+      homeCountry: null, interests: [], onRating: true, notifications: true, hideFromOtherCountries: false,
+    ));
+    expect(s.sessionModerator, isTrue);
+    expect(s.moderator?.shortName, 'Jane D.');
+
+    // Without Supabase there is no live session: a saved account session is dropped at launch.
+    final again = AppState();
+    await again.load();
+    expect(again.signedIn, isFalse);
+    expect(again.sessionAccountId, isNull);
+  });
+
+  test('referral codes: one permanent code per expert, +100 per colleague who joins', () async {
     SharedPreferences.setMockInitialValues({});
     final s = AppState();
     await s.load();
@@ -319,18 +372,18 @@ void main() {
     expect(codes.toSet().length, codes.length); // unique
 
     final p2 = s.expertById('p2')!;
-    final link = inviteLink(p2.referralCode);
+    final code = p2.referralCode;
     final before = s.statsOf(p2).points;
 
-    // A colleague opens the link: straight to the profile form.
-    expect(s.openInviteLink(link), InviteStatus.ok);
+    // A colleague types the code: straight to the profile form.
+    expect(s.redeemInvite(code), InviteStatus.ok);
     expect(s.canRegister, isTrue);
     expect(s.pendingReferrer?.id, 'p2');
     final a = s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Joiner-1', homeCountry: 'Cameroon',
         interests: {'Chad', 'Sudan'}, notifications: true, onRating: true);
     expect(s.referralsBy(p2), 1);
     expect(s.statsOf(p2).points, before + Points.referral);
-    // The new member gets their own referral link.
+    // The new member gets their own referral code.
     expect(a.referralCode, startsWith('REF-'));
     // The inviter can follow the colleague's progress: stage only.
     expect(s.referralProgress(p2).single.stage, ReferralStage.joined);
@@ -342,22 +395,22 @@ void main() {
       expect(s.referralProgress(p2).single.stage, i == 0 ? ReferralStage.firstRisk : (i == 1 ? ReferralStage.firstRisk : ReferralStage.threeRisks));
     }
 
-    // Permanent: the same link works again for another colleague.
+    // Permanent: the same code works again for another colleague.
     s.signOut();
-    expect(s.openInviteLink(link), InviteStatus.ok);
+    expect(s.redeemInvite(code), InviteStatus.ok);
     s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Joiner-2', homeCountry: 'Chad',
         interests: {}, notifications: true, onRating: true);
     expect(s.referralsBy(p2), 2);
     expect(s.statsOf(p2).points, before + 2 * Points.referral);
 
-    // Same link after a restart; the referrals are kept.
+    // Same code after a restart; the referrals are kept.
     final again = AppState();
     await again.load();
     expect(again.expertById('p2')!.referralCode, p2.referralCode);
     expect(again.referralsBy(again.expertById('p2')!), 2);
   });
 
-  testWidgets('profile shows the expert\'s own referral link', (tester) async {
+  testWidgets('profile shows the expert\'s own referral code', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await tester.runAsync(() => appState.load());
     await appState.resetDemo();
@@ -371,8 +424,10 @@ void main() {
     await tester.tap(find.text('Profile').last);
     await tester.pumpAndSettle();
     expect(find.text('INVITE A COLLEAGUE'), findsOneWidget);
-    expect(find.textContaining('?invite=REF-'), findsOneWidget);
-    expect(find.textContaining('3 colleagues joined through your link · +300 points'), findsOneWidget);
+    expect(find.text(appState.expertById('p1')!.referralCode), findsOneWidget);
+    expect(find.textContaining('?invite='), findsNothing);
+    expect(find.text('Copy code'), findsOneWidget);
+    expect(find.textContaining('3 colleagues joined with your code · +300 points'), findsOneWidget);
     expect(find.textContaining('Referral Master: you invited 3 experts'), findsOneWidget);
     // Progress per colleague: stage only, no names.
     expect(find.text('Colleague 1'), findsOneWidget);
@@ -390,7 +445,7 @@ void main() {
     // It comes after the anonymity level section.
     expect(tester.getTopLeft(find.text('INVITE A COLLEAGUE')).dy,
         greaterThan(tester.getTopLeft(find.text('ANONYMITY LEVEL')).dy));
-    expect(find.textContaining('Demo: you get +100 points'), findsOneWidget);
+    expect(find.textContaining('You get +100 points as soon as a colleague signs up'), findsOneWidget);
   });
 
   test('trust signals: how an expert joined, and what they do', () async {
@@ -400,13 +455,14 @@ void main() {
     // Moderator invite -> "Invited by ACAPS".
     s.signInModerator('m1');
     final i = s.createInvite();
-    s.openInviteLink(inviteLink(i.code));
+    s.signOut();
+    s.redeemInvite(i.code);
     final a = s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Via-ACAPS', homeCountry: 'Chad',
         interests: {}, notifications: true, onRating: true);
     expect(a.joinedVia, JoinedVia.acapsInvite);
     // Expert referral -> "Referred by an expert".
     s.signOut();
-    s.openInviteLink(inviteLink(s.expertById('p2')!.referralCode));
+    s.redeemInvite(s.expertById('p2')!.referralCode);
     final b = s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Via-Ref', homeCountry: 'Chad',
         interests: {}, notifications: true, onRating: true);
     expect(b.joinedVia, JoinedVia.expertReferral);
@@ -422,7 +478,7 @@ void main() {
     expect(s.expertActivity(s.expertById('e4')!), Activity.established);
   });
 
-  test('Referral Master badge: 3 or more experts joined with your link', () async {
+  test('Referral Master badge: 3 or more experts joined with your code', () async {
     SharedPreferences.setMockInitialValues({});
     final s = AppState();
     await s.load();
@@ -432,7 +488,7 @@ void main() {
     for (var i = 1; i <= 3; i++) {
       expect(s.badgesOf(p2).contains(Award.referralMaster), isFalse);
       s.signOut();
-      s.openInviteLink(inviteLink(p2.referralCode));
+      s.redeemInvite(p2.referralCode);
       s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'New-$i', homeCountry: 'Chad',
           interests: {}, notifications: true, onRating: true);
     }
@@ -440,7 +496,7 @@ void main() {
     expect(s.badgesOf(p2), contains(Award.referralMaster));
   });
 
-  test('invite links are single-use and never linked to the account', () async {
+  test('invite codes are single-use and never linked to the account', () async {
     SharedPreferences.setMockInitialValues({});
     final s = AppState();
     await s.load();
@@ -451,11 +507,11 @@ void main() {
     s.signOut();
 
     expect(s.redeemInvite('nope'), InviteStatus.unknown);
-    // No profile without a valid invite link.
+    // No profile without a valid invite code.
     expect(() => s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'X', homeCountry: 'Kenya',
         interests: {}, notifications: true, onRating: true), throwsStateError);
-    // The whole link works (as opened or pasted), not only the token.
-    expect(s.redeemInvite('https://example.org/app/?invite=${i.code}&utm=x'), InviteStatus.ok);
+    // Typed in lower case, with stray spaces: still works.
+    expect(s.redeemInvite(' ${i.code.toLowerCase()} '), InviteStatus.ok);
     expect(s.canRegister, isTrue); // straight to the profile form
     final e = s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Rift-01', homeCountry: 'Kenya',
         interests: {}, notifications: true, onRating: true);
@@ -464,11 +520,11 @@ void main() {
     expect(jsonEncode(i.toJson()).contains(e.id), isFalse);
     expect(jsonEncode(i.toJson()).contains('Rift-01'), isFalse);
 
-    // A second person cannot use the same link.
+    // A second person cannot use the same code.
     s.signOut();
     expect(s.redeemInvite(i.code), InviteStatus.used);
 
-    // A cancelled link stops working.
+    // A cancelled code stops working.
     s.signInModerator('m1');
     final j = s.createInvite();
     s.revokeInvite(j);
@@ -486,7 +542,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final s = AppState();
     await s.load();
-    s.redeemInvite(s.demoInvite!.code); // joining needs an invite link
+    s.redeemInvite(s.demoInvite!.code); // joining needs an invite code
     s.register(level: Anonymity.pseudonymous, realName: 'Test Person', pseudonym: 'Tester', homeCountry: 'Chad',
         interests: {'Sudan'}, notifications: true, onRating: true);
     final closed = s.archiveForMe().first;
@@ -799,10 +855,10 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final s = AppState();
     await s.load();
-    final link = inviteLink(s.expertById('p2')!.referralCode);
+    final code = s.expertById('p2')!.referralCode;
     final ids = <String>{};
     for (var i = 0; i < 5; i++) {
-      s.openInviteLink(link);
+      s.redeemInvite(code);
       ids.add(s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Fast-$i', homeCountry: 'Chad',
           interests: {}, notifications: true, onRating: true).id);
     }

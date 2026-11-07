@@ -104,7 +104,7 @@ class Expert {
   final double participation;
   final double skill;
 
-  /// Token of this expert's permanent referral link (one per expert, any
+  /// This expert's permanent referral code (one per expert, any
   /// number of colleagues can join with it). Assigned by the store.
   String referralCode;
 
