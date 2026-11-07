@@ -4,11 +4,6 @@ import '../models.dart';
 import '../store.dart';
 import '../widgets.dart';
 
-const _riskTypes = [
-  'New emerging risk',
-  'Marked deterioration in an existing crisis',
-  'Future impact of a hazard which has already taken place',
-];
 const _riskLevels = ['Low', 'Medium', 'High'];
 const _maxTriggers = 3;
 
@@ -39,10 +34,11 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
   late final Risk? r0 = widget.initial;
   late final _title = TextEditingController(text: r0?.title);
   late final _rationale = TextEditingController(text: r0?.rationale);
-  late final _exposure = TextEditingController(text: r0?.exposure);
-  late final _needs = TextEditingController(text: r0?.needs);
+  /// ACAPS categories, picked from the same lists as the Risk Radar.
+  late int? _exposure = r0?.exposureIdx;
+  late final Set<String> _needs = {...?r0?.needList.where(priorityNeeds.contains)};
   late final List<String> _countries = r0 == null ? [] : AppState.riskCountries(r0!);
-  late String _type = _riskTypes.contains(r0?.type) ? r0!.type : _riskTypes.first;
+  late String _type = riskTypes.contains(r0?.type) ? r0!.type : riskTypes.first;
   late int? _prob = r0?.probabilityIdx;
   late int? _impact = r0?.impact;
   late String? _level = _riskLevels.contains(r0?.level) ? r0!.level : null;
@@ -54,7 +50,7 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
 
   @override
   void dispose() {
-    for (final c in [_title, _rationale, _exposure, _needs]) {
+    for (final c in [_title, _rationale]) {
       c.dispose();
     }
     for (final t in _triggers) {
@@ -91,8 +87,8 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
       level: _level!,
       trend: r0?.trend ?? '',
       status: r0?.status ?? 'Active',
-      exposure: _exposure.text.trim(),
-      needs: _needs.text.trim(),
+      exposure: _exposure == null ? '' : exposureBands[_exposure!],
+      needs: priorityNeeds.where(_needs.contains).join(', '),
       materialisation: r0?.materialisation ?? '',
       triggers: [
         for (var i = 0; i < _triggers.length; i++)
@@ -158,7 +154,7 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
                     expandedInsets: EdgeInsets.zero,
                     initialSelection: _type,
                     label: const Text('Type'),
-                    dropdownMenuEntries: [for (final x in _riskTypes) DropdownMenuEntry(value: x, label: x)],
+                    dropdownMenuEntries: [for (final x in riskTypes) DropdownMenuEntry(value: x, label: x)],
                     onSelected: (v) {
                       if (v != null) setState(() => _type = v);
                     },
@@ -300,10 +296,33 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
                       ),
                     ),
 
-                  const SectionLabel('More (optional)'),
-                  TextField(controller: _exposure, minLines: 1, maxLines: 4, decoration: const InputDecoration(labelText: 'Expected exposure')),
-                  const SizedBox(height: 10),
-                  TextField(controller: _needs, minLines: 1, maxLines: 4, decoration: const InputDecoration(labelText: 'Expected priority needs')),
+                  const SectionLabel('Categories (optional)'),
+                  DropdownMenu<int?>(
+                    expandedInsets: EdgeInsets.zero,
+                    initialSelection: _exposure,
+                    label: const Text('Expected exposure'),
+                    leadingIcon: const Icon(Icons.groups_outlined),
+                    dropdownMenuEntries: [
+                      const DropdownMenuEntry(value: null, label: 'Not set'),
+                      for (var i = 0; i < exposureBands.length; i++) DropdownMenuEntry(value: i, label: '${exposureBands[i]} people'),
+                    ],
+                    onSelected: (v) => setState(() => _exposure = v),
+                  ),
+                  const SizedBox(height: 12),
+                  Text('Expected priority needs', style: t.bodyMedium),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final n in priorityNeeds)
+                        FilterChip(
+                          label: Text(n),
+                          selected: _needs.contains(n),
+                          onSelected: (on) => setState(() => on ? _needs.add(n) : _needs.remove(n)),
+                        ),
+                    ],
+                  ),
 
                   const SizedBox(height: 24),
                   if (_tried && _missing.isNotEmpty) ...[

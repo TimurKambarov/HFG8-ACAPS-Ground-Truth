@@ -30,6 +30,30 @@ int? parseLevel5(String s) {
   return null;
 }
 
+/// ACAPS risk categories, exactly as in the Risk Radar export (and on the
+/// ACAPS website). Each risk carries ACAPS's own values; none are invented.
+const riskTypes = [
+  'New emerging risk',
+  'Marked deterioration in an existing crisis',
+  'Future impact of a hazard which has already taken place',
+];
+
+const priorityNeeds = [
+  'Food security',
+  'Protection',
+  'Livelihoods',
+  'Health',
+  'WASH',
+  'Displacement',
+  'Humanitarian access',
+  'Shelter',
+  'Education',
+  'Nutrition',
+];
+
+/// Expected exposure bands (people who may need additional assistance), smallest first.
+const exposureBands = ['<20,000', '20,000-100,000', '100,000-250,000', '250,000-500,000', '>500,000'];
+
 /// "[ACLED 08/04/2026](https://...)" -> "ACLED 08/04/2026"
 String stripMarkdownLinks(String s) => s
     .replaceAllMapped(RegExp(r'\[([^\]]+)\]\([^)]*\)'), (m) => m[1]!)
@@ -199,13 +223,31 @@ class Risk {
   bool inCountry(String c) =>
       country.split(',').map((s) => s.trim()).contains(c);
 
-  String get shortType {
+  String get shortType => shortTypeOf(type);
+
+  /// Short label for a risk type, for chips: "New risk", "Deterioration", "Hazard impact".
+  static String shortTypeOf(String type) {
     final t = type.toLowerCase();
     if (t.startsWith('new')) return 'New risk';
     if (t.startsWith('marked')) return 'Deterioration';
     if (t.startsWith('future')) return 'Hazard impact';
     return type.isEmpty ? 'Risk' : type;
   }
+
+  /// Expected priority needs as separate categories, in ACAPS's order.
+  List<String> get needList {
+    final given = needs.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+    return [...priorityNeeds.where(given.contains), ...given.where((s) => !priorityNeeds.contains(s))];
+  }
+
+  /// Position of the expected exposure in [exposureBands], or null if unknown.
+  int? get exposureIdx {
+    final i = exposureBands.indexOf(exposure.trim());
+    return i < 0 ? null : i;
+  }
+
+  /// Everything a search should match: ID, title, countries and categories.
+  String get searchText => '$id $title $country $type $needs $exposure'.toLowerCase();
 
   /// First paragraph of the rationale, trimmed for a card.
   String get summary {

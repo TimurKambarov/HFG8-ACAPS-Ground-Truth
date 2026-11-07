@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ground_truth/main.dart';
 import 'package:ground_truth/models.dart';
+import 'package:ground_truth/screens/risk_filter.dart';
 import 'package:ground_truth/store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -56,6 +57,13 @@ void main() {
       await tester.tap(find.text('Experts').last);
       await tester.pumpAndSettle();
       expect(find.text('Invite experts'), findsNothing);
+      // Trust signals: how each expert got in, and a filter for it.
+      expect(find.text('Invited by ACAPS'), findsWidgets);
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Referred by an expert'));
+      await tester.pumpAndSettle();
+      expect(find.text('3 experts'), findsOneWidget); // Cedar-66, Monsoon-04, Rift-07
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Everyone'));
+      await tester.pumpAndSettle();
 
       // Profile: this moderator's name and display settings.
       await tester.tap(find.text('Profile').last);
@@ -364,18 +372,72 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('INVITE A COLLEAGUE'), findsOneWidget);
     expect(find.textContaining('?invite=REF-'), findsOneWidget);
-    expect(find.textContaining('2 colleagues joined through your link · +200 points'), findsOneWidget);
+    expect(find.textContaining('3 colleagues joined through your link · +300 points'), findsOneWidget);
+    expect(find.textContaining('Referral Master: you invited 3 experts'), findsOneWidget);
     // Progress per colleague: stage only, no names.
     expect(find.text('Colleague 1'), findsOneWidget);
     expect(find.text('Colleague 2'), findsOneWidget);
+    expect(find.text('Colleague 3'), findsOneWidget);
+    // One colleague at each stage: fully active, part way, just joined.
     expect(find.textContaining('fully active'), findsOneWidget);
+    expect(find.textContaining(RegExp(r'^Answered [12] of 3 risks')), findsOneWidget);
     expect(find.text('Joined · no risks answered yet'), findsOneWidget);
     expect(find.textContaining('Cedar-66'), findsNothing);
+    // Experts never see how they (or anyone) joined: moderators only.
+    expect(find.text('Invited by ACAPS'), findsNothing);
+    expect(find.text('Referred by an expert'), findsNothing);
     expect(find.textContaining('Rift-07'), findsNothing);
     // It comes after the anonymity level section.
     expect(tester.getTopLeft(find.text('INVITE A COLLEAGUE')).dy,
         greaterThan(tester.getTopLeft(find.text('ANONYMITY LEVEL')).dy));
     expect(find.textContaining('Demo: you get +100 points'), findsOneWidget);
+  });
+
+  test('trust signals: how an expert joined, and what they do', () async {
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    // Moderator invite -> "Invited by ACAPS".
+    s.signInModerator('m1');
+    final i = s.createInvite();
+    s.openInviteLink(inviteLink(i.code));
+    final a = s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Via-ACAPS', homeCountry: 'Chad',
+        interests: {}, notifications: true, onRating: true);
+    expect(a.joinedVia, JoinedVia.acapsInvite);
+    // Expert referral -> "Referred by an expert".
+    s.signOut();
+    s.openInviteLink(inviteLink(s.expertById('p2')!.referralCode));
+    final b = s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Via-Ref', homeCountry: 'Chad',
+        interests: {}, notifications: true, onRating: true);
+    expect(b.joinedVia, JoinedVia.expertReferral);
+    // Kept after a restart.
+    final again = AppState();
+    await again.load();
+    expect(again.expertById(b.id)!.joinedVia, JoinedVia.expertReferral);
+
+    // Activity: new until 3 risks answered; established with a quality record.
+    expect(s.expertActivity(b), Activity.newcomer);
+    expect(s.expertActivity(s.expertById('e13')!), Activity.newcomer);
+    expect(s.expertActivity(s.expertById('e12')!), Activity.active);
+    expect(s.expertActivity(s.expertById('e4')!), Activity.established);
+  });
+
+  test('Referral Master badge: 3 or more experts joined with your link', () async {
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    expect(Award.referralMaster.label, 'Referral Master');
+    expect(s.badgesOf(s.expertById('p1')!), contains(Award.referralMaster)); // demo: 3 referrals
+    final p2 = s.expertById('p2')!;
+    for (var i = 1; i <= 3; i++) {
+      expect(s.badgesOf(p2).contains(Award.referralMaster), isFalse);
+      s.signOut();
+      s.openInviteLink(inviteLink(p2.referralCode));
+      s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'New-$i', homeCountry: 'Chad',
+          interests: {}, notifications: true, onRating: true);
+    }
+    expect(s.referralsBy(p2), 3);
+    expect(s.badgesOf(p2), contains(Award.referralMaster));
   });
 
   test('invite links are single-use and never linked to the account', () async {
@@ -680,7 +742,7 @@ void main() {
     await tester.pumpWidget(const GroundTruthApp());
     await tester.pumpAndSettle();
 
-    final field = find.widgetWithText(TextField, 'Search ID, title or country');
+    final field = find.widgetWithText(TextField, 'Search ID, title, country or category');
     expect(field, findsOneWidget);
 
     // By number: only R1049 (an active risk) remains.
@@ -699,9 +761,108 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('No risks match'), findsOneWidget);
 
-    // Clear brings the full list back.
-    await tester.tap(find.byTooltip('Clear search'));
+    // "Clear" brings the full list back (as on the moderators' Risks tab).
+    await tester.tap(find.text('Clear'));
     await tester.pumpAndSettle();
     expect(find.textContaining('R1043'), findsWidgets);
+    expect(find.textContaining('recommended for you'), findsOneWidget); // the experts' default sort
+
+    // Categories: the search matches them.
+    final r1043 = appState.byId('R1043')!;
+    expect(r1043.type, 'Marked deterioration in an existing crisis');
+    await tester.enterText(field, 'deterioration');
+    await tester.pumpAndSettle();
+    expect(find.textContaining('R1043'), findsWidgets);
+    await tester.tap(find.text('Clear'));
+    await tester.pumpAndSettle();
+
+    // The same filter-and-sort sheet as moderators, without moderator-only options.
+    await tester.tap(find.byTooltip('Filter and sort'));
+    await tester.pumpAndSettle();
+    expect(find.text('Filter and sort'), findsOneWidget);
+    expect(find.text('Expected priority needs (any of)'), findsOneWidget);
+    expect(find.text('Risks with comments to review'), findsNothing);
+    expect(find.text('Risks where experts are split'), findsNothing);
+    final missing = priorityNeeds.firstWhere((n) => !r1043.needList.contains(n));
+    await tester.tap(find.widgetWithText(FilterChip, missing));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('R1043'), findsNothing); // R1043 has no "$missing" need
+    expect(find.descendant(of: find.byType(Badge), matching: find.text('1')), findsOneWidget);
+    await tester.tap(find.text('Clear'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('R1043'), findsWidgets);
+  });
+
+  test('two registrations in the same instant get different accounts', () async {
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    final link = inviteLink(s.expertById('p2')!.referralCode);
+    final ids = <String>{};
+    for (var i = 0; i < 5; i++) {
+      s.openInviteLink(link);
+      ids.add(s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Fast-$i', homeCountry: 'Chad',
+          interests: {}, notifications: true, onRating: true).id);
+    }
+    expect(ids.length, 5);
+  });
+
+  test('experts sort and filter with the same component as moderators', () async {
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    final f = RiskFilter(defaultSort: RiskSort.recommended);
+    final closed = s.risks.where((r) => r.isResolved).toList();
+    expect(f.applyBasic(closed).map((r) => r.id), closed.map((r) => r.id)); // recommended: as given
+    f.sort = RiskSort.exposure;
+    final byExposure = f.applyBasic(closed);
+    for (var i = 1; i < byExposure.length; i++) {
+      expect((byExposure[i - 1].exposureIdx ?? -1) >= (byExposure[i].exposureIdx ?? -1), isTrue);
+    }
+    f.sort = RiskSort.id;
+    final byId = f.applyBasic(closed).map((r) => r.id).toList();
+    expect(byId, [...byId]..sort());
+    f.update((x) => x.clearSheet());
+    expect(f.sort, RiskSort.recommended); // Reset goes back to the experts' default
+    expect(expertSorts, isNot(contains(RiskSort.toReview))); // no moderator-only sorts
+  });
+
+  test('categories come from ACAPS data and drive the moderator filters', () async {
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    // Every value in the data is one of ACAPS's lists (as sent by ACAPS).
+    for (final r in s.risks) {
+      expect(r.type.isEmpty || riskTypes.contains(r.type), isTrue, reason: '${r.id}: ${r.type}');
+      for (final n in r.needList) {
+        expect(priorityNeeds, contains(n), reason: '${r.id}: $n');
+      }
+      expect(r.exposure.trim().isEmpty || r.exposureIdx != null, isTrue, reason: '${r.id}: ${r.exposure}');
+    }
+    expect(s.risks.where((r) => r.isActive).every((r) => r.needList.isNotEmpty && r.type.isNotEmpty), isTrue);
+
+    final f = RiskFilter()..status = RiskStatus.all;
+    final all = f.apply(s.risks).length;
+    f.needs.add('Protection');
+    final protection = f.apply(s.risks);
+    expect(protection, isNotEmpty);
+    expect(protection.every((x) => x.$1.needList.contains('Protection')), isTrue);
+    expect(protection.length, lessThan(all));
+    f.clearSheet();
+    f.minExposure = exposureBands.length - 1; // >500,000
+    expect(f.apply(s.risks).every((x) => x.$1.exposure == '>500,000'), isTrue);
+    f.clearSheet();
+    f.sort = RiskSort.exposure;
+    final sorted = f.apply(s.risks);
+    expect(sorted.first.$1.exposure, '>500,000');
+    f.query = 'food security';
+    expect(f.apply(s.risks).every((x) => x.$1.needs.toLowerCase().contains('food security') || x.$1.title.toLowerCase().contains('food security')), isTrue);
+
+    // The export uses ACAPS's field names for them too.
+    final json = jsonDecode(s.publicViewJson([s.byId('R1043')!]))['risks'][0] as Map<String, dynamic>;
+    expect(json['Expected priority needs'], isNotNull);
+    expect(json['Expected exposure'], '>500,000');
   });
 }
