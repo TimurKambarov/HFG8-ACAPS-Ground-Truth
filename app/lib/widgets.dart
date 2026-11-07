@@ -28,6 +28,69 @@ class SectionLabel extends StatelessWidget {
   }
 }
 
+/// A risk's ACAPS categories as chips: risk type, expected priority needs
+/// and expected exposure (as on the ACAPS website). Shows only what ACAPS
+/// recorded. [compact] (risk cards): the type and up to [maxNeeds] needs.
+class CategoryChips extends StatelessWidget {
+  final Risk risk;
+  final bool compact;
+  final int maxNeeds;
+  const CategoryChips(this.risk, {super.key, this.compact = false, this.maxNeeds = 3});
+
+  static IconData typeIcon(String type) {
+    final t = type.toLowerCase();
+    if (t.startsWith('new')) return Icons.fiber_new_outlined;
+    if (t.startsWith('marked')) return Icons.trending_down;
+    return Icons.flood_outlined;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final needs = risk.needList;
+    final shown = compact ? needs.take(maxNeeds).toList() : needs;
+    final chips = <Widget>[
+      if (risk.type.isNotEmpty)
+        Tooltip(
+          message: 'Risk type: ${risk.type}',
+          child: _Chip(compact ? risk.shortType : risk.type, typeIcon(risk.type), cs.primary),
+        ),
+      for (final n in shown) Tooltip(message: 'Expected priority need', child: _Chip(n, Icons.sell_outlined, cs.onSurfaceVariant)),
+      if (compact && needs.length > shown.length) _Chip('+${needs.length - shown.length}', null, cs.onSurfaceVariant),
+      if (!compact && risk.exposureIdx != null)
+        Tooltip(
+          message: 'Expected exposure: people who may need additional assistance',
+          child: _Chip('${risk.exposure} people', Icons.groups_outlined, cs.onSurfaceVariant),
+        ),
+    ];
+    if (chips.isEmpty) return const SizedBox.shrink();
+    return Wrap(spacing: 6, runSpacing: 6, children: chips);
+  }
+}
+
+class _Chip extends StatelessWidget {
+  final String text;
+  final IconData? icon;
+  final Color color;
+  const _Chip(this.text, this.icon, this.color);
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withAlpha(110)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[Icon(icon, size: 13, color: color), const SizedBox(width: 4)],
+            Flexible(child: Text(text, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: color))),
+          ],
+        ),
+      );
+}
+
 class LevelBadge extends StatelessWidget {
   final String level;
   const LevelBadge(this.level, {super.key});
@@ -263,6 +326,8 @@ class RiskTile extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, height: 1.3),
                         ),
+                        const SizedBox(height: 8),
+                        CategoryChips(risk, compact: true),
                         const SizedBox(height: 10),
                         Row(
                           children: [

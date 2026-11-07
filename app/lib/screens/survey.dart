@@ -247,17 +247,10 @@ class _SurveyScreenState extends State<SurveyScreen> {
           'You answer before you see the group, so your view stays independent.',
           style: t.bodyMedium,
         ),
-        // Always visible: exposure and triggers.
-        if (r.exposure.isNotEmpty) ...[
-          const SectionLabel('Expected exposure'),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Icon(Icons.groups_outlined, size: 20),
-              const SizedBox(width: 8),
-              Expanded(child: Text(r.exposure, style: t.bodyMedium)),
-            ],
-          ),
+        // Always visible: ACAPS's categories (type, priority needs, exposure) and triggers.
+        if (r.type.isNotEmpty || r.needList.isNotEmpty || r.exposureIdx != null) ...[
+          const SectionLabel('Categories'),
+          CategoryChips(r),
         ],
         if (r.triggers.isNotEmpty) ...[
           const SectionLabel('Triggers ACAPS is watching'),

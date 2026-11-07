@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../models.dart';
 import '../store.dart';
 import '../widgets.dart';
+import 'home.dart' show AwardIcon;
 
 class ProfileTab extends StatefulWidget {
   const ProfileTab({super.key});
@@ -323,6 +324,23 @@ class _ReferralCard extends StatelessWidget {
             ),
             // Each colleague's progress: stage only, never who they are.
             for (var i = 0; i < progress.length; i++) _ReferralRow(number: i + 1, answered: progress[i].answered, stage: progress[i].stage),
+            const SizedBox(height: 12),
+            // Toward the Referral Master badge (shown in the Rating).
+            Row(
+              children: [
+                const AwardIcon(Award.referralMaster, size: 26),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    n >= referralMasterMin
+                        ? 'Referral Master: you invited $n experts who joined. The badge shows in the Rating.'
+                        : '${referralMasterMin - n} more ${referralMasterMin - n == 1 ? 'colleague' : 'colleagues'} '
+                            'to earn the Referral Master badge.',
+                    style: t.bodySmall,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 10),
             InfoBanner(
               icon: Icons.info_outline,
