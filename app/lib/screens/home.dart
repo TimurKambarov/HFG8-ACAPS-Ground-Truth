@@ -4,6 +4,7 @@ import '../models.dart';
 import '../store.dart';
 import '../widgets.dart';
 import 'profile.dart';
+import 'risk_filter.dart';
 import 'survey.dart';
 
 class HomeShell extends StatefulWidget {
@@ -127,35 +128,36 @@ class _InboxTabState extends State<InboxTab> {
   bool _allArchive = false;
   bool _archiveMineOnly = false;
   final _search = TextEditingController();
-  String _q = '';
+
+  /// The same search, filters and sort as the moderators' Risks tab.
+  final _filter = RiskFilter(defaultSort: RiskSort.recommended);
 
   @override
   void dispose() {
     _search.dispose();
+    _filter.dispose();
     super.dispose();
   }
-
-  /// Same matching as the moderator's risk search: ID (or just its number),
-  /// title or country.
-  bool _matches(Risk r) =>
-      _q.isEmpty || '${r.id} ${r.title} ${r.oneLiner} ${r.country}'.toLowerCase().contains(_q.toLowerCase());
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     return ListenableBuilder(
-      listenable: appState,
+      listenable: Listenable.merge([appState, _filter]),
       builder: (context, _) {
         final me = appState.me;
         if (me == null) return const SizedBox();
-        final searching = _q.trim().isNotEmpty;
+        final f = _filter;
+        if (_search.text != f.query) _search.text = f.query;
+        final searching = f.active;
         final note = searching ? null : appState.pendingNotification;
-        final active = appState.activeForMe().where(_matches).toList();
-        final allClosed = appState.archiveForMe().where(_matches).toList();
+        final active = f.applyBasic(appState.activeForMe());
+        final allClosed = f.applyBasic(appState.archiveForMe());
         final mineClosed = allClosed.where((r) => appState.relevantTo(me, r)).toList();
         final archive = _archiveMineOnly ? mineClosed : allClosed;
-        // While searching, show every match.
+        // While searching or filtering, show every match.
         final shownArchive = _allArchive || searching ? archive : archive.take(5);
+        final n = f.sheetCount;
 
         return ListView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -164,29 +166,48 @@ class _InboxTabState extends State<InboxTab> {
             const SizedBox(height: 4),
             Text('Your countries: ${([me.homeCountry, ...me.interests]).join(', ')}', style: t.bodySmall),
             const SizedBox(height: 12),
-            TextField(
-              controller: _search,
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search),
-                hintText: 'Search ID, title or country',
-                isDense: true,
-                suffixIcon: searching
-                    ? IconButton(
-                        tooltip: 'Clear search',
-                        icon: const Icon(Icons.close),
-                        onPressed: () => setState(() {
-                          _search.clear();
-                          _q = '';
-                        }),
-                      )
-                    : null,
+            // Search + filter button, exactly as on the moderators' Risks tab.
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _search,
+                    decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search), hintText: 'Search ID, title, country or category', isDense: true),
+                    onChanged: (v) => f.update((x) => x.query = v),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Badge(
+                  isLabelVisible: n > 0,
+                  label: Text('$n'),
+                  child: IconButton.filledTonal(
+                    tooltip: 'Filter and sort',
+                    onPressed: () => showRiskFilterSheet(context, f, moderator: false),
+                    icon: const Icon(Icons.tune),
+                  ),
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 10, bottom: 2),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${active.length + allClosed.length} ${active.length + allClosed.length == 1 ? 'risk' : 'risks'} · ${f.sort.label.toLowerCase()}',
+                      style: t.labelLarge,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (searching) TextButton(onPressed: () => f.update((x) => x.clear()), child: const Text('Clear')),
+                ],
               ),
-              onChanged: (v) => setState(() => _q = v),
             ),
             if (searching && active.isEmpty && allClosed.isEmpty)
               Padding(
-                padding: const EdgeInsets.only(top: 16),
-                child: Text('No risks match "${_q.trim()}". Try a risk number (e.g. 1043), a word from the title, or a country.',
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('No risks match. Try a risk number (e.g. 1043), a word from the title, a country or a category.',
                     style: t.bodyMedium),
               ),
             // Slides away after "Not now", so it is obvious the tap worked.

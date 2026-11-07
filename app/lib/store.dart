@@ -598,8 +598,13 @@ class AppState extends ChangeNotifier {
     if ((invite == null || !invite.open) && referrer == null) {
       throw StateError('A new profile needs a valid invite or referral link.');
     }
+    // A unique id, even for two registrations in the same instant.
+    var id = 'u${DateTime.now().microsecondsSinceEpoch}';
+    while (expertById(id) != null) {
+      id = '${id}x';
+    }
     final e = Expert(
-      id: 'u${DateTime.now().millisecondsSinceEpoch}',
+      id: id,
       // The door check, for moderators: how this person got in.
       joinedVia: referrer != null && (invite == null || !invite.open) ? JoinedVia.expertReferral : JoinedVia.acapsInvite,
       realName: level.needsRealName ? realName?.trim() : null,
@@ -1201,6 +1206,8 @@ class AppState extends ChangeNotifier {
       'Impact': r.impact,
       'Risk Level': r.level.isEmpty ? null : r.level,
       'Risk trend': r.trend.isEmpty ? null : r.trend,
+      'Expected exposure': r.exposure.isEmpty ? null : r.exposure,
+      'Expected priority needs': r.needs.isEmpty ? null : r.needs,
       'Status': r.status,
       // What this tool adds.
       'expert_input': {

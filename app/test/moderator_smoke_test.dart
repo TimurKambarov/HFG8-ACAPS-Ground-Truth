@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ground_truth/main.dart';
 import 'package:ground_truth/models.dart';
+import 'package:ground_truth/screens/risk_filter.dart';
 import 'package:ground_truth/store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -741,7 +742,7 @@ void main() {
     await tester.pumpWidget(const GroundTruthApp());
     await tester.pumpAndSettle();
 
-    final field = find.widgetWithText(TextField, 'Search ID, title or country');
+    final field = find.widgetWithText(TextField, 'Search ID, title, country or category');
     expect(field, findsOneWidget);
 
     // By number: only R1049 (an active risk) remains.
@@ -760,9 +761,108 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('No risks match'), findsOneWidget);
 
-    // Clear brings the full list back.
-    await tester.tap(find.byTooltip('Clear search'));
+    // "Clear" brings the full list back (as on the moderators' Risks tab).
+    await tester.tap(find.text('Clear'));
     await tester.pumpAndSettle();
     expect(find.textContaining('R1043'), findsWidgets);
+    expect(find.textContaining('recommended for you'), findsOneWidget); // the experts' default sort
+
+    // Categories: the search matches them.
+    final r1043 = appState.byId('R1043')!;
+    expect(r1043.type, 'Marked deterioration in an existing crisis');
+    await tester.enterText(field, 'deterioration');
+    await tester.pumpAndSettle();
+    expect(find.textContaining('R1043'), findsWidgets);
+    await tester.tap(find.text('Clear'));
+    await tester.pumpAndSettle();
+
+    // The same filter-and-sort sheet as moderators, without moderator-only options.
+    await tester.tap(find.byTooltip('Filter and sort'));
+    await tester.pumpAndSettle();
+    expect(find.text('Filter and sort'), findsOneWidget);
+    expect(find.text('Expected priority needs (any of)'), findsOneWidget);
+    expect(find.text('Risks with comments to review'), findsNothing);
+    expect(find.text('Risks where experts are split'), findsNothing);
+    final missing = priorityNeeds.firstWhere((n) => !r1043.needList.contains(n));
+    await tester.tap(find.widgetWithText(FilterChip, missing));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('R1043'), findsNothing); // R1043 has no "$missing" need
+    expect(find.descendant(of: find.byType(Badge), matching: find.text('1')), findsOneWidget);
+    await tester.tap(find.text('Clear'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('R1043'), findsWidgets);
+  });
+
+  test('two registrations in the same instant get different accounts', () async {
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    final link = inviteLink(s.expertById('p2')!.referralCode);
+    final ids = <String>{};
+    for (var i = 0; i < 5; i++) {
+      s.openInviteLink(link);
+      ids.add(s.register(level: Anonymity.anonymous, realName: null, pseudonym: 'Fast-$i', homeCountry: 'Chad',
+          interests: {}, notifications: true, onRating: true).id);
+    }
+    expect(ids.length, 5);
+  });
+
+  test('experts sort and filter with the same component as moderators', () async {
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    final f = RiskFilter(defaultSort: RiskSort.recommended);
+    final closed = s.risks.where((r) => r.isResolved).toList();
+    expect(f.applyBasic(closed).map((r) => r.id), closed.map((r) => r.id)); // recommended: as given
+    f.sort = RiskSort.exposure;
+    final byExposure = f.applyBasic(closed);
+    for (var i = 1; i < byExposure.length; i++) {
+      expect((byExposure[i - 1].exposureIdx ?? -1) >= (byExposure[i].exposureIdx ?? -1), isTrue);
+    }
+    f.sort = RiskSort.id;
+    final byId = f.applyBasic(closed).map((r) => r.id).toList();
+    expect(byId, [...byId]..sort());
+    f.update((x) => x.clearSheet());
+    expect(f.sort, RiskSort.recommended); // Reset goes back to the experts' default
+    expect(expertSorts, isNot(contains(RiskSort.toReview))); // no moderator-only sorts
+  });
+
+  test('categories come from ACAPS data and drive the moderator filters', () async {
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    // Every value in the data is one of ACAPS's lists (as sent by ACAPS).
+    for (final r in s.risks) {
+      expect(r.type.isEmpty || riskTypes.contains(r.type), isTrue, reason: '${r.id}: ${r.type}');
+      for (final n in r.needList) {
+        expect(priorityNeeds, contains(n), reason: '${r.id}: $n');
+      }
+      expect(r.exposure.trim().isEmpty || r.exposureIdx != null, isTrue, reason: '${r.id}: ${r.exposure}');
+    }
+    expect(s.risks.where((r) => r.isActive).every((r) => r.needList.isNotEmpty && r.type.isNotEmpty), isTrue);
+
+    final f = RiskFilter()..status = RiskStatus.all;
+    final all = f.apply(s.risks).length;
+    f.needs.add('Protection');
+    final protection = f.apply(s.risks);
+    expect(protection, isNotEmpty);
+    expect(protection.every((x) => x.$1.needList.contains('Protection')), isTrue);
+    expect(protection.length, lessThan(all));
+    f.clearSheet();
+    f.minExposure = exposureBands.length - 1; // >500,000
+    expect(f.apply(s.risks).every((x) => x.$1.exposure == '>500,000'), isTrue);
+    f.clearSheet();
+    f.sort = RiskSort.exposure;
+    final sorted = f.apply(s.risks);
+    expect(sorted.first.$1.exposure, '>500,000');
+    f.query = 'food security';
+    expect(f.apply(s.risks).every((x) => x.$1.needs.toLowerCase().contains('food security') || x.$1.title.toLowerCase().contains('food security')), isTrue);
+
+    // The export uses ACAPS's field names for them too.
+    final json = jsonDecode(s.publicViewJson([s.byId('R1043')!]))['risks'][0] as Map<String, dynamic>;
+    expect(json['Expected priority needs'], isNotNull);
+    expect(json['Expected exposure'], '>500,000');
   });
 }
