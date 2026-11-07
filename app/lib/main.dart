@@ -11,10 +11,14 @@ void main() {
   // A tapped push notification opens the app with ?risk=<id> (web) or the
   // same value from the notification payload (mobile).
   appState.deepLinkRisk = Uri.base.queryParameters['risk'];
-  // A scanned invite QR code opens the app with ?invite=<code>.
+  // An opened invite link starts the app with ?invite=<token>: the only way
+  // in for new members. A reload with the same link while signed in is
+  // ignored; a new link means a new person joining on this device.
   final invite = Uri.base.queryParameters['invite'];
   appState.load().then((_) {
-    if (invite != null && !appState.signedIn) appState.redeemInvite(invite);
+    if (invite != null && (!appState.signedIn || invite != appState.lastOpenedInvite)) {
+      appState.openInviteLink(invite);
+    }
   });
   runApp(const GroundTruthApp());
 }
@@ -64,9 +68,12 @@ class GroundTruthApp extends StatelessWidget {
           ? ModeratorShell(key: ValueKey('moderator-${appState.sessionModeratorId}'))
           : appState.me != null
               ? HomeShell(key: ValueKey('home-${appState.me!.id}'))
-              : appState.invitePanel == null
-                  ? const InviteScreen(key: ValueKey('invite'))
-                  : const SignInScreen(key: ValueKey('signin')),
+              // An opened, valid invite link goes straight to the profile form.
+              : appState.canRegister
+                  ? const RegisterScreen(key: ValueKey('register'))
+                  : appState.atSignIn
+                      ? const SignInScreen(key: ValueKey('signin'))
+                      : const InviteScreen(key: ValueKey('start')),
     );
   }
 }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../models.dart';
 import '../store.dart';
 import '../widgets.dart';
 
@@ -161,6 +163,9 @@ class _ProfileTabState extends State<ProfileTab> {
               style: t.bodySmall,
             ),
 
+            const SectionLabel('Invite a colleague'),
+            _ReferralCard(me: me),
+
             const SectionLabel('Profile'),
             TextField(
               controller: _pseudo,
@@ -234,6 +239,155 @@ class _ProfileTabState extends State<ProfileTab> {
           ],
         );
       },
+    );
+  }
+}
+
+/// The expert's own permanent referral link: colleagues they trust can join
+/// the closed group with it. One link per expert, any number of colleagues.
+class _ReferralCard extends StatelessWidget {
+  final Expert me;
+  const _ReferralCard({required this.me});
+
+  static String _message(String link) =>
+      'I am part of the ACAPS Ground Truth expert group: a few minutes a month to ground-truth ACAPS '
+      'humanitarian risk analysis, at the level of anonymity you choose. You can join with my link: $link';
+
+  void _copy(BuildContext context, String text, String what) {
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$what copied')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final link = inviteLink(me.referralCode);
+    final n = appState.referralsBy(me);
+    final progress = appState.referralProgress(me);
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Your referral link', style: t.titleSmall),
+            const SizedBox(height: 4),
+            Text('Send it to experts you trust: they can join the group with it. '
+                'It is permanent and works for any number of colleagues.', style: t.bodySmall),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
+              child: Row(
+                children: [
+                  Icon(Icons.link, color: cs.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: SelectableText(link, style: const TextStyle(fontFamily: 'monospace', fontSize: 13, fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () => _copy(context, link, 'Referral link'),
+              icon: const Icon(Icons.copy, size: 18),
+              label: const Text('Copy link'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () => _copy(context, _message(link), 'Invitation message'),
+              icon: const Icon(Icons.mail_outline, size: 18),
+              label: const Text('Copy invitation message'),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Icon(Icons.group_add_outlined, color: cs.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    n == 0
+                        ? 'Nobody has joined through your link yet.'
+                        : '$n ${n == 1 ? 'colleague' : 'colleagues'} joined through your link · +${n * Points.referral} points',
+                    style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+            // Each colleague's progress: stage only, never who they are.
+            for (var i = 0; i < progress.length; i++) _ReferralRow(number: i + 1, answered: progress[i].answered, stage: progress[i].stage),
+            const SizedBox(height: 10),
+            InfoBanner(
+              icon: Icons.info_outline,
+              text: 'Demo: you get +${Points.referral} points as soon as a colleague registers with your link. '
+                  'In the real pilot: only once they have answered at least ${Points.referralAnswersInPilot} risks.',
+            ),
+            const SizedBox(height: 8),
+            Text('Anonymity: you only see how far each colleague has got (how many risks they answered), '
+                'never their name, pseudonym, answers or comments. They do not see who invited them, '
+                'and they were told about this when they joined.', style: t.bodySmall),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// "Colleague 1  ●──●──○  Answered 1 of 3 risks": one referred colleague's
+/// progress through the three stages, without anything that identifies them.
+class _ReferralRow extends StatelessWidget {
+  final int number;
+  final int answered;
+  final ReferralStage stage;
+  const _ReferralRow({required this.number, required this.answered, required this.stage});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    const goal = Points.referralAnswersInPilot;
+    final done = stage.index; // 0 joined, 1 first risk, 2 three risks
+    final label = switch (stage) {
+      ReferralStage.joined => 'Joined · no risks answered yet',
+      ReferralStage.firstRisk => 'Answered $answered of $goal risks',
+      ReferralStage.threeRisks => '$goal+ risks answered: fully active',
+    };
+    Widget dot(bool on) => Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: on ? cs.primary : Colors.transparent,
+            border: Border.all(color: on ? cs.primary : cs.outline, width: 2),
+          ),
+        );
+    Widget line(bool on) => Expanded(child: Container(height: 2, color: on ? cs.primary : cs.outlineVariant));
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(
+        children: [
+          SizedBox(width: 92, child: Text('Colleague $number', style: const TextStyle(fontWeight: FontWeight.w700))),
+          SizedBox(
+            width: 70,
+            child: Row(children: [dot(true), line(done >= 1), dot(done >= 1), line(done >= 2), dot(done >= 2)]),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Row(
+              children: [
+                Flexible(child: Text(label, style: t.bodySmall)),
+                if (stage == ReferralStage.threeRisks) ...[
+                  const SizedBox(width: 4),
+                  Icon(Icons.check_circle, size: 16, color: cs.primary),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

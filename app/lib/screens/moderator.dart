@@ -1,10 +1,8 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import '../models.dart';
 import '../store.dart';
@@ -149,7 +147,7 @@ class _ModeratorShellState extends State<ModeratorShell> {
               ],
             ),
             actions: [
-              IconButton(tooltip: 'Invite QR code for any country', onPressed: () => showInviteSheet(context), icon: const Icon(Icons.qr_code_2)),
+              IconButton(tooltip: 'Invite an expert (single-use link)', onPressed: () => showInviteSheet(context), icon: const Icon(Icons.link)),
               if (me != null)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
@@ -265,7 +263,7 @@ class _InboxTabState extends State<_InboxTab> {
           Text(
             'These countries have active risks but not enough experts. With none, nobody can answer. '
             'With 1 or 2, group results could reveal who answered, so at least $minPanel are needed. '
-            'Invite trusted contacts with the country\'s QR code.',
+            'Create a personal invite link for a trusted contact with the link button at the top.',
             style: t.bodyMedium,
           ),
           if (inbox.empty.isNotEmpty)
@@ -347,14 +345,6 @@ class _CountryGroupState extends State<_CountryGroup> {
             child: ListTile(
               title: Text(p.country, style: const TextStyle(fontWeight: FontWeight.w700)),
               subtitle: Text(widget.status(p), style: TextStyle(color: cs.onSurfaceVariant)),
-              trailing: FilledButton.tonalIcon(
-                // The app theme makes filled buttons full width; a ListTile trailing needs a finite size.
-                style: FilledButton.styleFrom(minimumSize: const Size(0, 40)),
-                onPressed: () => showInviteSheet(context, p.country),
-                icon: const Icon(Icons.qr_code_2, size: 18),
-                label: const Text('Invite'),
-              ),
-              onTap: () => showInviteSheet(context, p.country),
             ),
           ),
         if (widget.alerts.length > _preview)
@@ -367,143 +357,188 @@ class _CountryGroupState extends State<_CountryGroup> {
   }
 }
 
-/// The invite QR code ACAPS shares with trusted contacts in one country.
-/// With [country] the QR code shows straight away; without it (the QR button
-/// in the top bar) the moderator picks a country first.
-void showInviteSheet(BuildContext context, [String? country]) {
+/// The moderator's invite button: generates a new single-use link straight
+/// away (no country to pick: the expert chooses theirs when creating their
+/// profile), and lists all links.
+void showInviteSheet(BuildContext context) {
+  // Generated on the tap itself (not while the dialog builds).
+  final link = appState.createInvite();
   showDialog<void>(
     context: context,
     builder: (_) => Dialog(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 440),
-        child: _InviteSheet(country: country),
+        child: _InviteSheet(first: link),
       ),
     ),
   );
 }
 
-/// Link a scanned code opens: this app with ?invite=<code>.
-String inviteLink(String code) {
-  final b = Uri.base;
-  return Uri(scheme: b.scheme, host: b.host, port: b.hasPort ? b.port : null, path: b.path, queryParameters: {'invite': code})
-      .toString();
-}
-
-/// PNG of the QR code on white, ready to print.
-Future<Uint8List> _qrPng(String data) async {
-  const size = 1024.0, pad = 64.0;
-  final rec = ui.PictureRecorder();
-  final canvas = Canvas(rec);
-  canvas.drawRect(const Rect.fromLTWH(0, 0, size, size), Paint()..color = Colors.white);
-  canvas.translate(pad, pad);
-  QrPainter(
-    data: data,
-    version: QrVersions.auto,
-    gapless: true,
-    eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: Colors.black),
-    dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: Colors.black),
-  ).paint(canvas, const Size(size - 2 * pad, size - 2 * pad));
-  final img = await rec.endRecording().toImage(size.toInt(), size.toInt());
-  final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
-  return bytes!.buffer.asUint8List();
-}
+/// Ready-to-send invitation text with the personal link.
+String inviteMessage(Invite i) =>
+    'You are invited to join the ACAPS Ground Truth expert group: a few minutes a month to '
+    'ground-truth ACAPS risk analysis, at the level of anonymity you choose.\n\n'
+    'Your personal link (works once, please do not share it): ${inviteLink(i.code)}';
 
 class _InviteSheet extends StatefulWidget {
-  final String? country;
-  const _InviteSheet({this.country});
+  /// The link generated when the button was tapped.
+  final Invite first;
+  const _InviteSheet({required this.first});
 
   @override
   State<_InviteSheet> createState() => _InviteSheetState();
 }
 
+/// Opens with a freshly generated link, ready to copy; below, every link
+/// with its status (open, used, cancelled).
 class _InviteSheetState extends State<_InviteSheet> {
-  late String? _country = widget.country;
+  late Invite _link = widget.first;
+  final _note = TextEditingController();
 
-  /// Opened for one country: no country picker.
-  bool get _fixed => widget.country != null;
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
 
   void _copy(String text, String what) {
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$what copied')));
   }
 
+  void _another() {
+    _note.clear();
+    setState(() => _link = appState.createInvite());
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
-    final c = _country;
-    final code = c == null ? null : inviteCodeFor(c);
-    final n = c == null ? 0 : appState.panelFor(c).length;
+    final cs = Theme.of(context).colorScheme;
+    final list = appState.invitesNewestFirst;
+    final open = list.where((i) => i.open).length;
+    final used = list.where((i) => i.used).length;
+    final cancelled = list.where((i) => i.revoked).length;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
               const SizedBox(width: 48),
-              Expanded(
-                child: Text(_fixed ? 'Invite experts to $c' : 'Invite experts', textAlign: TextAlign.center, style: t.titleLarge),
-              ),
+              Expanded(child: Text('New invite link', textAlign: TextAlign.center, style: t.titleLarge)),
               IconButton(tooltip: 'Close', onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
             ],
           ),
-          const SizedBox(height: 12),
-          if (!_fixed)
-            DropdownMenu<String>(
-              expandedInsets: EdgeInsets.zero,
-              initialSelection: c,
-              menuHeight: 320,
-              label: const Text('Country'),
-              leadingIcon: const Icon(Icons.place_outlined),
-              dropdownMenuEntries: [for (final x in appState.countries) DropdownMenuEntry(value: x, label: x)],
-              onSelected: (v) => setState(() => _country = v),
-            ),
-          if (c == null)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 32),
-              child: Text('Pick a country to get its invite QR code.', style: t.bodySmall),
-            )
-          else ...[
-            const SizedBox(height: 6),
-            Text('$n ${n == 1 ? 'expert' : 'experts'} in $c now · minimum $minPanel · target 5-10', style: t.bodySmall),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
-              child: QrImageView(data: inviteLink(code!), size: 200, backgroundColor: Colors.white, padding: EdgeInsets.zero),
-            ),
-            const SizedBox(height: 10),
-            SelectableText(code, style: const TextStyle(fontFamily: 'monospace', fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: 1)),
-            const SizedBox(height: 6),
-            Text('Share it only with people you trust. Whoever scans it joins as an expert for $c.',
-                textAlign: TextAlign.center, style: t.bodySmall),
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              alignment: WrapAlignment.center,
+          const SizedBox(height: 4),
+          Text('Personal and works once. ACAPS knows whom it invited; once inside, the expert chooses their '
+              'own anonymity and countries. A used link is never linked to the account.',
+              textAlign: TextAlign.center, style: t.bodySmall),
+          const SizedBox(height: 14),
+          // The link is the invitation and the authorisation: opening it lets
+          // that one person create a profile.
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
+            child: Row(
               children: [
-                if (canDownload)
-                  OutlinedButton.icon(
-                    onPressed: () async => downloadBytes('invite-${code.toLowerCase()}.png', await _qrPng(inviteLink(code)), 'image/png'),
-                    icon: const Icon(Icons.download, size: 18),
-                    label: const Text('Download QR (PNG)'),
-                  ),
-                OutlinedButton.icon(
-                  onPressed: () => _copy(inviteLink(code), 'Invite link for $c'),
-                  icon: const Icon(Icons.link, size: 18),
-                  label: const Text('Copy link'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () => _copy(code, 'Invite code for $c'),
-                  icon: const Icon(Icons.copy, size: 18),
-                  label: const Text('Copy code'),
+                Icon(Icons.link, color: cs.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: SelectableText(inviteLink(_link.code),
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 13.5, fontWeight: FontWeight.w700)),
                 ),
               ],
             ),
-          ],
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            onPressed: () => _copy(inviteLink(_link.code), 'Invite link'),
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('Copy link'),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.center,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => _copy(inviteMessage(_link), 'Invitation message'),
+                icon: const Icon(Icons.mail_outline, size: 18),
+                label: const Text('Copy invitation message'),
+              ),
+              TextButton.icon(
+                onPressed: _another,
+                icon: const Icon(Icons.link, size: 18),
+                label: const Text('Another link'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _note,
+            decoration: const InputDecoration(
+              labelText: 'Who is it for? (optional, moderators only)',
+              hintText: 'e.g. protection officer, Abéché',
+              isDense: true,
+            ),
+            onChanged: (v) => appState.setInviteNote(_link, v),
+          ),
+          const SectionLabel('Invite links'),
+          Text('$open open · $used used${cancelled == 0 ? '' : ' · $cancelled cancelled'}', style: t.bodySmall),
+          for (final i in list)
+            _InviteRow(invite: i, onCopy: () => _copy(inviteLink(i.code), 'Invite link'), onChanged: () => setState(() {})),
         ],
       ),
+    );
+  }
+}
+
+/// One invite link in the moderator's list.
+class _InviteRow extends StatelessWidget {
+  final Invite invite;
+  final VoidCallback onCopy;
+  final VoidCallback onChanged;
+  const _InviteRow({required this.invite, required this.onCopy, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final i = invite;
+    final by = moderatorById(i.createdBy)?.shortName ?? 'a moderator';
+    final status = i.revoked
+        ? 'Cancelled'
+        : i.used
+            ? 'Used ${formatDate(i.usedAt!)}'
+            : 'Open';
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      leading: Icon(
+        i.open ? Icons.link : (i.used ? Icons.check_circle_outline : Icons.link_off),
+        color: i.open ? cs.primary : cs.onSurfaceVariant,
+      ),
+      title: Text('${i.code} · $status', style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w700)),
+      subtitle: Text('${i.note.isEmpty ? '' : '${i.note} · '}created ${formatDate(i.createdAt)} by $by', style: t.bodySmall),
+      trailing: i.open
+          ? Wrap(
+              children: [
+                IconButton(tooltip: 'Copy link', onPressed: onCopy, icon: const Icon(Icons.copy, size: 18)),
+                IconButton(
+                  tooltip: 'Cancel this link',
+                  onPressed: () {
+                    appState.revokeInvite(i);
+                    onChanged();
+                  },
+                  icon: Icon(Icons.link_off, size: 18, color: cs.error),
+                ),
+              ],
+            )
+          : null,
     );
   }
 }
@@ -613,11 +648,13 @@ class _SplitView extends StatelessWidget {
 
 enum RiskStatus { active, archive, all }
 
-enum RiskSort { toReview, disagreement, gap, responseRate, level, id }
+enum RiskSort { toReview, changed, split, disagreement, gap, responseRate, level, id }
 
 extension RiskSortText on RiskSort {
   String get label => switch (this) {
         RiskSort.toReview => 'Most comments to review',
+        RiskSort.changed => 'Biggest change in expert view',
+        RiskSort.split => 'Experts most split',
         RiskSort.disagreement => 'Most disagreement with ACAPS',
         RiskSort.gap => 'Biggest forecast gap with ACAPS',
         RiskSort.responseRate => 'Lowest response rate',
@@ -633,6 +670,9 @@ class RiskFilter extends ChangeNotifier {
   RiskStatus status = RiskStatus.active;
   RiskSort sort = RiskSort.toReview;
   bool onlyToReview = false;
+
+  /// Only risks where experts disagree among themselves (no clear group view).
+  bool onlySplit = false;
   double minDisagreement = 0;
 
   void update(void Function(RiskFilter f) f) {
@@ -652,11 +692,12 @@ class RiskFilter extends ChangeNotifier {
     country = null;
     sort = RiskSort.toReview;
     onlyToReview = false;
+    onlySplit = false;
     minDisagreement = 0;
   }
 
   /// Filters set in the sheet (sort is not a filter).
-  int get sheetCount => (region == null ? 0 : 1) + (country == null ? 0 : 1) + (onlyToReview ? 1 : 0) + (minDisagreement > 0 ? 1 : 0);
+  int get sheetCount => (region == null ? 0 : 1) + (country == null ? 0 : 1) + (onlyToReview ? 1 : 0) + (onlySplit ? 1 : 0) + (minDisagreement > 0 ? 1 : 0);
 
   List<(Risk, RiskModStats)> apply(List<Risk> risks) {
     final q = query.toLowerCase();
@@ -671,12 +712,19 @@ class RiskFilter extends ChangeNotifier {
       if (q.isNotEmpty && !'${r.id} ${r.title} ${r.country}'.toLowerCase().contains(q)) continue;
       final s = appState.modStats(r);
       if (onlyToReview && s.toReview == 0) continue;
+      if (onlySplit && !s.split) continue;
       if (s.disagreement < minDisagreement) continue;
       out.add((r, s));
     }
     int lvl(Risk r) => switch (r.level) { 'High' => 3, 'Medium' => 2, 'Low' => 1, _ => 0 };
     out.sort((a, b) => switch (sort) {
           RiskSort.toReview => b.$2.toReview != a.$2.toReview ? b.$2.toReview.compareTo(a.$2.toReview) : b.$2.comments.compareTo(a.$2.comments),
+          RiskSort.changed => b.$2.moved.abs() != a.$2.moved.abs()
+              ? b.$2.moved.abs().compareTo(a.$2.moved.abs())
+              : b.$2.changed.compareTo(a.$2.changed),
+          RiskSort.split => b.$2.spreadWidth != a.$2.spreadWidth
+              ? b.$2.spreadWidth.compareTo(a.$2.spreadWidth)
+              : b.$2.answered.compareTo(a.$2.answered),
           RiskSort.disagreement => b.$2.disagreement.compareTo(a.$2.disagreement),
           RiskSort.gap => (b.$2.gap?.abs() ?? -1).compareTo(a.$2.gap?.abs() ?? -1),
           RiskSort.responseRate => a.$2.responseRate.compareTo(b.$2.responseRate),
@@ -875,6 +923,13 @@ void _showRiskFilterSheet(BuildContext context, RiskFilter f) {
                 onChanged: (v) => f.update((x) => x.onlyToReview = v),
                 title: const Text('Risks with comments to review'),
               ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: f.onlySplit,
+                onChanged: (v) => f.update((x) => x.onlySplit = v),
+                title: const Text('Risks where experts are split'),
+                subtitle: const Text('No clear group view: this part of the analysis may need attention.'),
+              ),
               Row(
                 children: [
                   Expanded(child: Text('Disagreement with ACAPS at least', style: t.bodyMedium)),
@@ -897,6 +952,31 @@ void _showRiskFilterSheet(BuildContext context, RiskFilter f) {
   );
 }
 
+/// "Experts split": the panel disagrees among itself on the forecast.
+class _SplitPill extends StatelessWidget {
+  const _SplitPill();
+
+  @override
+  Widget build(BuildContext context) {
+    final c = agreementColors[Agreement.partly]!;
+    return Tooltip(
+      message: 'Experts disagree among themselves: no clear group view. This part of the analysis may need attention.',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(color: c.withAlpha(40), borderRadius: BorderRadius.circular(10), border: Border.all(color: c)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.call_split, size: 13, color: c),
+            const SizedBox(width: 3),
+            Text('experts split', style: TextStyle(color: c, fontSize: 11.5, fontWeight: FontWeight.w800)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// A risk in the moderator list: who/where, what, and one line of status.
 class _ModRiskTile extends StatelessWidget {
   final Risk risk;
@@ -912,6 +992,7 @@ class _ModRiskTile extends StatelessWidget {
     final status = [
       '${s.answered}/${s.panel} answered',
       if (s.comments > 0) '${s.comments} ${s.comments == 1 ? 'comment' : 'comments'}',
+      if (s.moved != 0) 'view ${s.moved > 0 ? 'up' : 'down'} this month',
       if (s.panel < minPanel) 'too few experts',
     ].join(' · ');
     return Card(
@@ -946,6 +1027,7 @@ class _ModRiskTile extends StatelessWidget {
               Row(
                 children: [
                   Expanded(child: Text(status, style: t.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                  if (s.split) ...[const _SplitPill(), const SizedBox(width: 6)],
                   if (s.toReview > 0) _CountPill('${s.toReview} new', color: cs.primary),
                 ],
               ),
@@ -1041,7 +1123,6 @@ class ModRiskDetail extends StatelessWidget {
                           style: const TextStyle(fontSize: 13.5),
                         ),
                       ),
-                      TextButton(onPressed: () => showInviteSheet(context, thin.first.$1), child: const Text('Invite')),
                     ],
                   ),
                 ),
@@ -1083,8 +1164,8 @@ class ModRiskDetail extends StatelessWidget {
                       ),
                       TextButton.icon(
                         onPressed: () => _showPublicPreview(context, r),
-                        icon: const Icon(Icons.public, size: 18),
-                        label: const Text('Publish'),
+                        icon: const Icon(Icons.output, size: 18),
+                        label: const Text('Expert input'),
                       ),
                     ],
                   ),
@@ -1914,8 +1995,10 @@ class _RiskPickerState extends State<_RiskPicker> {
   }
 }
 
-/// What the public may see for this risk, and the export for the website:
-/// aggregates only, plus the names of experts who agreed to be credited.
+/// The expert input for ACAPS's own systems: the risk's Risk Radar / API
+/// fields plus aggregated expert answers (and, if chosen, named contributors).
+/// ACAPS's website is fed from its API, so this is data for ACAPS to pull in,
+/// not a page to upload.
 void _showPublicPreview(BuildContext context, Risk r) {
   showModalBottomSheet<void>(
     context: context,
@@ -1963,17 +2046,19 @@ class _PublishSheetState extends State<_PublishSheet> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
         children: [
-          Text('Publish · ${r.id}', style: t.titleLarge),
+          Text('Expert input for ACAPS · ${r.id}', style: t.titleLarge),
           const SizedBox(height: 4),
-          Text('Aggregates only: no comments, no respondent countries, no names next to answers. '
+          Text('Ready for ACAPS\'s own systems: the risk\'s fields use the same names as the Risk Radar '
+              'export and API, with the experts\' aggregated answers added. '
+              'Aggregates only: no comments, no respondent countries, no names next to answers. '
               'Results are hidden below $minPanel respondents.', style: t.bodySmall),
           const SizedBox(height: 8),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: _credits,
             onChanged: (v) => setState(() => _credits = v),
-            title: const Text('Credit experts who agreed'),
-            subtitle: const Text('Each expert chooses per risk: real name, pseudonym or anonymous. The default comes from their profile.'),
+            title: const Text('Include experts who chose to be named'),
+            subtitle: const Text('Each expert chooses per risk: real name, pseudonym or anonymous. The default matches their profile\'s anonymity level.'),
           ),
           if (_credits && n >= minPanel)
             Container(
@@ -2006,14 +2091,14 @@ class _PublishSheetState extends State<_PublishSheet> {
             runSpacing: 8,
             children: [
               OutlinedButton.icon(
-                onPressed: () => _export([r], 'public-view-${r.id.toLowerCase()}.json'),
+                onPressed: () => _export([r], 'expert-input-${r.id.toLowerCase()}.json'),
                 icon: Icon(canDownload ? Icons.download : Icons.copy, size: 18),
                 label: const Text('This risk (JSON)'),
               ),
               OutlinedButton.icon(
-                onPressed: all.isEmpty ? null : () => _export(all, 'public-view-all.json'),
+                onPressed: all.isEmpty ? null : () => _export(all, 'expert-input-all.json'),
                 icon: Icon(canDownload ? Icons.download : Icons.copy, size: 18),
-                label: Text('All publishable · ${all.length} (JSON)'),
+                label: Text('All risks with enough answers · ${all.length} (JSON)'),
               ),
               TextButton.icon(
                 onPressed: () => _copy(appState.publicViewJson([r], credits: _credits)),
@@ -2024,7 +2109,7 @@ class _PublishSheetState extends State<_PublishSheet> {
           ),
           const SizedBox(height: 16),
           if (n < minPanel)
-            InfoBanner(icon: Icons.visibility_off_outlined, text: 'Only $n respondents: no results or names are published for this risk. The export contains the ACAPS rating only.')
+            InfoBanner(icon: Icons.visibility_off_outlined, text: 'Only $n respondents: no expert results or names are shared for this risk. The export contains the ACAPS fields only.')
           else ...[
             Text('${r.oneLiner}\n$n experts', style: t.titleSmall),
             const SizedBox(height: 14),
@@ -2050,7 +2135,10 @@ class _GroupForecast extends StatelessWidget {
   Widget build(BuildContext context) {
     final g = GroupView.of(appState.forecastsFor(risk));
     if (g == null) return const SizedBox.shrink();
-    return GroupLine(answer: g.probability, spread: g.spread(levelLabels), n: g.n, noun: 'forecast');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [GroupLine(group: g, forecast: true, noun: 'forecast'), TrendLine(risk: risk)],
+    );
   }
 }
 
@@ -2153,7 +2241,7 @@ class _ExpertsTabState extends State<_ExpertsTab> {
             ),
           ],
         ),
-        // Panel size for the chosen country. Invites: the QR button in the top bar.
+        // Panel size for the chosen country. Invites: the link button in the top bar.
         if (_country != null)
           Padding(
             padding: const EdgeInsets.only(top: 10),
@@ -2227,6 +2315,8 @@ void _showExpert(BuildContext context, Expert e) {
                 Pill('Countries: ${e.countries.join(', ')}', icon: Icons.place_outlined),
                 Pill('${appState.responsesOf(e).length} answers', icon: Icons.how_to_vote_outlined),
                 Pill('${cm.length} comments · ${cm.where((c) => c.useful).length} useful', icon: Icons.forum_outlined),
+                if (appState.referralsBy(e) case final n when n > 0)
+                  Pill('$n ${n == 1 ? 'colleague' : 'colleagues'} joined via their link', icon: Icons.group_add_outlined),
                 Pill('${st.points} points', icon: Icons.emoji_events_outlined),
                 if (st.brier != null) Pill('accuracy ${accuracyPct(st.brier!)}%', icon: Icons.track_changes),
                 if (!e.onRating) const Pill('not in rating', icon: Icons.visibility_off_outlined),

@@ -85,7 +85,12 @@ class Expert {
   final double participation;
   final double skill;
 
+  /// Token of this expert's permanent referral link (one per expert, any
+  /// number of colleagues can join with it). Assigned by the store.
+  String referralCode;
+
   Expert({
+    this.referralCode = '',
     required this.id,
     required this.realName,
     required this.pseudonym,
@@ -137,6 +142,7 @@ class Expert {
         'persona': persona,
         'participation': participation,
         'skill': skill,
+        'referral_code': referralCode,
       };
 
   factory Expert.fromJson(Map<String, dynamic> m) => Expert(
@@ -153,6 +159,7 @@ class Expert {
         persona: m['persona'] == true,
         participation: (m['participation'] as num?)?.toDouble() ?? 0.8,
         skill: (m['skill'] as num?)?.toDouble() ?? 0.5,
+        referralCode: (m['referral_code'] as String?) ?? '',
       );
 }
 
@@ -195,7 +202,8 @@ String displayName(Expert expert, Viewer viewer) {
 }
 
 /// Credit in a published report when the expert has not chosen for this
-/// risk: follows the profile level.
+/// risk: matches the anonymity level they picked for their profile (level 1:
+/// real name, 2: pseudonym, 3: anonymous). They can change it per risk.
 Credit defaultCredit(Expert e) => switch (e.level) {
       Anonymity.knownToAcaps => Credit.realName,
       Anonymity.pseudonymous => Credit.pseudonym,

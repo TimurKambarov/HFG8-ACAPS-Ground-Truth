@@ -76,8 +76,9 @@ void main() {
       expect(s.panelForRisk(r).length, 8);
       expect(s.respondents(r).length, 5);
 
-      expect(s.redeemInvite('nope'), isNull);
-      expect(s.redeemInvite('gt-chad-7q4x'), 'Chad');
+      expect(s.redeemInvite('nope'), InviteStatus.unknown);
+      expect(s.redeemInvite(s.demoInvite!.code), InviteStatus.ok);
+      expect(s.invitePanel, 'Chad');
       s.signInAs(s.expertById('p1')!);
       expect(s.pendingNotification?.id, 'R1043');
 
