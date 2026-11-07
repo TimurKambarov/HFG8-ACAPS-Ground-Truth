@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../models.dart';
 import '../store.dart';
 import '../widgets.dart';
-import 'my_answers.dart';
+import 'home.dart' show AwardIcon;
 
 class ProfileTab extends StatefulWidget {
   const ProfileTab({super.key});
@@ -114,13 +116,7 @@ class _ProfileTabState extends State<ProfileTab> {
               ],
             ),
 
-            const SizedBox(height: 16),
-            FilledButton.tonalIcon(
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MyAnswersScreen())),
-              icon: const Icon(Icons.history),
-              label: const Text('My answers'),
-            ),
+            // Forecasts and comment feedback live in the My forecasts tab.
 
             const SectionLabel('Anonymity level'),
             for (final opt in Anonymity.values)
@@ -168,6 +164,9 @@ class _ProfileTabState extends State<ProfileTab> {
               style: t.bodySmall,
             ),
 
+            const SectionLabel('Invite a colleague'),
+            _ReferralCard(me: me),
+
             const SectionLabel('Profile'),
             // The pseudonym is the login name, so it is fixed after sign-up.
             TextField(
@@ -202,7 +201,7 @@ class _ProfileTabState extends State<ProfileTab> {
             const SectionLabel('Display'),
             const DisplaySettings(),
 
-            const SectionLabel('Demo'),
+            SectionLabel(appState.sessionAccountId != null ? 'Account' : 'Demo'),
             OutlinedButton.icon(
               onPressed: appState.signOut,
               icon: Icon(appState.sessionAccountId != null ? Icons.logout : Icons.switch_account_outlined),
@@ -245,6 +244,194 @@ class _ProfileTabState extends State<ProfileTab> {
           ],
         );
       },
+    );
+  }
+}
+
+/// The expert's own permanent referral code: colleagues they trust can join
+/// the closed group with it. One code per expert, any number of colleagues.
+/// There is no installed app yet, so the colleague types the code on the
+/// start screen ("I have a code"); there is no link to open.
+class _ReferralCard extends StatelessWidget {
+  final Expert me;
+  const _ReferralCard({required this.me});
+
+  static String _message(String code) =>
+      'I am part of the ACAPS Ground Truth expert group: a few minutes a month to ground-truth ACAPS '
+      'humanitarian risk analysis, at the level of anonymity you choose.\n\n'
+      'Join Ground Truth with my code: $code\n'
+      'Open the app, tap "I have a code" and type it in.';
+
+  void _copy(BuildContext context, String text, String what) {
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$what copied')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final code = me.referralCode;
+    final n = appState.referralsBy(me);
+    final progress = appState.referralProgress(me);
+    final syncError = appState.sessionAccountId == null ? null : appState.accountSyncError;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Your referral code', style: t.titleSmall),
+            const SizedBox(height: 4),
+            Text('Share it with experts you trust: they type it in the app to join the group. '
+                'It is permanent and works for any number of colleagues.', style: t.bodySmall),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
+              child: Row(
+                children: [
+                  Icon(Icons.vpn_key_outlined, color: cs.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: code.isEmpty
+                        ? Text(syncError ?? 'Loading your code…', style: t.bodySmall?.copyWith(color: syncError == null ? null : cs.error))
+                        : SelectableText(code,
+                            style: const TextStyle(fontFamily: 'monospace', fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+                  ),
+                  if (code.isEmpty && syncError != null)
+                    IconButton(tooltip: 'Try again', onPressed: appState.refreshAccount, icon: const Icon(Icons.refresh)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: code.isEmpty ? null : () => _copy(context, code, 'Referral code'),
+              icon: const Icon(Icons.copy, size: 18),
+              label: const Text('Copy code'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: code.isEmpty ? null : () => _copy(context, _message(code), 'Invitation message'),
+              icon: const Icon(Icons.mail_outline, size: 18),
+              label: const Text('Copy invitation message'),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Icon(Icons.group_add_outlined, color: cs.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    n == 0
+                        ? 'Nobody has joined with your code yet.'
+                        : '$n ${n == 1 ? 'colleague' : 'colleagues'} joined with your code · +${n * Points.referral} points',
+                    style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+            // Each colleague's progress: stage only, never who they are.
+            for (var i = 0; i < progress.length; i++)
+              _ReferralRow(
+                number: i + 1,
+                answered: progress[i].answered,
+                stage: progress[i].stage,
+                joinedAt: progress[i].joinedAt,
+                tracked: progress[i].tracked,
+              ),
+            const SizedBox(height: 12),
+            // Toward the Referral Master badge (shown in the Rating).
+            Row(
+              children: [
+                const AwardIcon(Award.referralMaster, size: 26),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    n >= referralMasterMin
+                        ? 'Referral Master: you invited $n experts who joined. The badge shows in the Rating.'
+                        : '${referralMasterMin - n} more ${referralMasterMin - n == 1 ? 'colleague' : 'colleagues'} '
+                            'to earn the Referral Master badge.',
+                    style: t.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            const InfoBanner(
+              icon: Icons.info_outline,
+              text: 'You get +${Points.referral} points as soon as a colleague signs up with your code.',
+            ),
+            const SizedBox(height: 8),
+            Text('Anonymity: you only see how far each colleague has got (how many risks they answered), '
+                'never their name, pseudonym, answers or comments. They do not see who invited them, '
+                'and they were told about this when they joined.', style: t.bodySmall),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// "Colleague 1  ●──●──○  Answered 1 of 3 risks": one referred colleague's
+/// progress through the three stages, without anything that identifies them.
+/// For real accounts only the join date is known ([tracked] false): answers
+/// are not in the shared database yet.
+class _ReferralRow extends StatelessWidget {
+  final int number;
+  final int answered;
+  final ReferralStage stage;
+  final DateTime joinedAt;
+  final bool tracked;
+  const _ReferralRow({required this.number, required this.answered, required this.stage, required this.joinedAt, this.tracked = true});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    const goal = Points.referralAnswersInPilot;
+    final done = stage.index; // 0 joined, 1 first risk, 2 three risks
+    final label = !tracked
+        ? 'Joined ${formatDate(joinedAt)}'
+        : switch (stage) {
+            ReferralStage.joined => 'Joined · no risks answered yet',
+            ReferralStage.firstRisk => 'Answered $answered of $goal risks',
+            ReferralStage.threeRisks => '$goal+ risks answered: fully active',
+          };
+    Widget dot(bool on) => Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: on ? cs.primary : Colors.transparent,
+            border: Border.all(color: on ? cs.primary : cs.outline, width: 2),
+          ),
+        );
+    Widget line(bool on) => Expanded(child: Container(height: 2, color: on ? cs.primary : cs.outlineVariant));
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(
+        children: [
+          SizedBox(width: 92, child: Text('Colleague $number', style: const TextStyle(fontWeight: FontWeight.w700))),
+          SizedBox(
+            width: 70,
+            child: Row(children: [dot(true), line(done >= 1), dot(done >= 1), line(done >= 2), dot(done >= 2)]),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Row(
+              children: [
+                Flexible(child: Text(label, style: t.bodySmall)),
+                if (stage == ReferralStage.threeRisks) ...[
+                  const SizedBox(width: 4),
+                  Icon(Icons.check_circle, size: 16, color: cs.primary),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -378,6 +565,7 @@ class _CountryPickerState extends State<_CountryPicker> {
     final list = appState.countries
         .where((c) => !widget.exclude.contains(c) && c.toLowerCase().contains(_q.toLowerCase()))
         .toList();
+    // Lifted above the phone keyboard, so the search field stays visible.
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SizedBox(

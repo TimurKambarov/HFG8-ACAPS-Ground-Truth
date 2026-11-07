@@ -5,12 +5,16 @@
   "version": "0.2.0",
   "configurations": [
     {
+      // Real accounts and ACAPS's risks: the task passes only SUPABASE_URL and
+      // SUPABASE_PUBLISHABLE_KEY from ../API.key (never the secret key).
       "name": "app-mobile (phone)",
       "cwd": "app-mobile",
       "program": "lib/main.dart",
       "request": "launch",
       "type": "dart",
-      "flutterMode": "debug"
+      "flutterMode": "debug",
+      "preLaunchTask": "Supabase keys (app-mobile)",
+      "toolArgs": ["--dart-define-from-file=.dart_tool/supabase_keys.json"]
     },
     {
       "name": "app (reference)",
@@ -36,7 +40,9 @@
       "program": "lib/main.dart",
       "request": "launch",
       "type": "dart",
-      "deviceId": "edge"
+      "deviceId": "edge",
+      "preLaunchTask": "Supabase keys (app-mobile)",
+      "toolArgs": ["--dart-define-from-file=.dart_tool/supabase_keys.json"]
     }
   ]
 }

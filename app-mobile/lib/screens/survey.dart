@@ -8,25 +8,40 @@ import '../widgets.dart';
 
 enum SurveyStart { intro, questions, summary }
 
+/// "Not now" on a risk: skip it and say so clearly, with Undo. The risk stays
+/// in the Risks list (tagged "Skipped") and the banner hides for this session.
+void notNow(BuildContext context, Risk r) {
+  appState.skip(r);
+  final title = r.title.length > 90 ? '${r.title.substring(0, 90).trimRight()}…' : r.title;
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(
+      behavior: SnackBarBehavior.floating,
+      // A snack bar with an action stays until closed unless told otherwise.
+      persist: false,
+      duration: const Duration(seconds: 5),
+      content: Text('Skipped: "$title". It stays in your list, marked "Skipped", so you can answer later.'),
+      action: SnackBarAction(label: 'Undo', onPressed: () => appState.undoSkip(r)),
+    ));
+}
+
 class _Draft {
   Agreement? agree;
-  int? likelihood;
   int? severity;
   final TextEditingController missing;
 
   _Draft([ItemAnswer? a])
       : agree = a?.agree,
-        likelihood = a?.likelihood,
         severity = a?.severity,
         missing = TextEditingController(text: a?.missing ?? '');
 
-  bool get complete => agree != null && likelihood != null && severity != null;
+  bool get complete => agree != null && severity != null;
 
-  ItemAnswer toAnswer() =>
-      ItemAnswer(agree: agree!, likelihood: likelihood!, severity: severity!, missing: missing.text.trim());
+  ItemAnswer toAnswer() => ItemAnswer(agree: agree!, severity: severity!, missing: missing.text.trim());
 }
 
-/// Risk survey: intro -> one screen per trigger -> thank you + group summary.
+/// Risk survey: intro -> one ground-truthing screen per trigger -> one
+/// scored forecast for the whole risk -> thank you + group summary.
 class SurveyScreen extends StatefulWidget {
   final Risk risk;
   final SurveyStart start;
@@ -42,11 +57,18 @@ class SurveyScreen extends StatefulWidget {
 class _SurveyScreenState extends State<SurveyScreen> {
   late final List<SurveyItem> items = widget.risk.surveyItems;
   late final Map<String, _Draft> drafts;
-  late int step; // 0 = intro, 1..n = items, n+1 = summary
+  late int step; // 0 = intro, 1..n = triggers, n+1 = forecast, n+2 = summary
   bool _details = false;
 
+  /// How to credit me if this risk is published; starts from my profile.
+  Credit? _credit;
+
+  /// The one scored answer: ACAPS probability scale 1..5.
+  int? _forecast;
+
   Risk get r => widget.risk;
-  int get summaryStep => items.length + 1;
+  int get forecastStep => items.length + 1;
+  int get summaryStep => items.length + 2;
 
   @override
   void initState() {
@@ -54,8 +76,11 @@ class _SurveyScreenState extends State<SurveyScreen> {
     final me = appState.me;
     final existing = me == null ? null : appState.responseOf(me, r);
     drafts = {for (final it in items) it.id: _Draft(existing?.items[it.id])};
+    _forecast = existing?.forecast;
+    _credit = me == null ? null : (existing?.credit ?? defaultCredit(me));
     step = switch (widget.start) {
-      _ when me == null => summaryStep,
+      // Closed risks are read-only: straight to what happened and the group view.
+      _ when me == null || r.isResolved => summaryStep,
       SurveyStart.intro => 0,
       SurveyStart.questions => 1,
       SurveyStart.summary => existing == null ? 0 : summaryStep,
@@ -73,7 +98,7 @@ class _SurveyScreenState extends State<SurveyScreen> {
   void _go(int s) {
     FocusScope.of(context).unfocus();
     if (s == summaryStep) {
-      appState.submit(r, {for (final e in drafts.entries) e.key: e.value.toAnswer()});
+      appState.submit(r, {for (final e in drafts.entries) e.key: e.value.toAnswer()}, forecast: _forecast!, credit: _credit);
     }
     setState(() => step = s);
   }
@@ -81,18 +106,25 @@ class _SurveyScreenState extends State<SurveyScreen> {
   @override
   Widget build(BuildContext context) {
     final inItems = step >= 1 && step <= items.length;
+    final inQuestions = step >= 1 && step <= forecastStep;
     return ListenableBuilder(
       listenable: appState,
       builder: (context, _) => Scaffold(
         appBar: AppBar(
           title: Text(
-            step == 0 ? r.id : (inItems ? '${r.id} · ${items.length == 1 ? 'Question' : 'Trigger'} $step of ${items.length}' : 'Group summary'),
+            step == 0
+                ? r.id
+                : inItems
+                    ? '${r.id} · ${items.length == 1 ? 'The risk' : 'Trigger $step of ${items.length}'}'
+                    : step == forecastStep
+                        ? '${r.id} · Your forecast'
+                        : (r.isResolved ? '${r.id} · What happened' : 'Group summary'),
             style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
           ),
-          bottom: inItems
+          bottom: inQuestions
               ? PreferredSize(
                   preferredSize: const Size.fromHeight(4),
-                  child: LinearProgressIndicator(value: step / items.length, minHeight: 4),
+                  child: LinearProgressIndicator(value: step / forecastStep, minHeight: 4),
                 )
               : null,
         ),
@@ -103,8 +135,23 @@ class _SurveyScreenState extends State<SurveyScreen> {
             child: step == 0
                 ? _intro(context)
                 : inItems
-                    ? _ItemPage(item: items[step - 1], index: step - 1, total: items.length, draft: drafts[items[step - 1].id]!, onChanged: () => setState(() {}))
-                    : _Summary(risk: r),
+                    ? _ItemPage(
+                        item: items[step - 1],
+                        index: step - 1,
+                        total: items.length,
+                        draft: drafts[items[step - 1].id]!,
+                        onChanged: () => setState(() {}),
+                      )
+                    : step == forecastStep
+                        ? _ForecastPage(
+                            risk: r,
+                            value: _forecast,
+                            onSelect: (v) => setState(() => _forecast = v),
+                            footer: appState.me != null && _credit != null
+                                ? CreditPicker(expert: appState.me!, value: _credit!, onChanged: (c) => setState(() => _credit = c))
+                                : null,
+                          )
+                        : _Summary(risk: r),
           ),
         ),
         bottomNavigationBar: SafeArea(
@@ -126,7 +173,7 @@ class _SurveyScreenState extends State<SurveyScreen> {
             TextButton(
               style: TextButton.styleFrom(minimumSize: const Size(0, 52)),
               onPressed: () {
-                appState.skip(r);
+                notNow(context, r);
                 Navigator.of(context).pop();
               },
               child: const Text('Not now'),
@@ -139,9 +186,9 @@ class _SurveyScreenState extends State<SurveyScreen> {
         ],
       );
     }
-    if (step <= items.length) {
-      final d = drafts[items[step - 1].id]!;
-      final last = step == items.length;
+    if (step <= forecastStep) {
+      final last = step == forecastStep;
+      final ok = last ? _forecast != null : drafts[items[step - 1].id]!.complete;
       return Row(
         children: [
           OutlinedButton(
@@ -152,7 +199,7 @@ class _SurveyScreenState extends State<SurveyScreen> {
           const SizedBox(width: 10),
           Expanded(
             child: FilledButton(
-              onPressed: d.complete ? () => _go(step + 1) : null,
+              onPressed: ok ? () => _go(step + 1) : null,
               child: Text(last ? 'Send answers' : 'Next'),
             ),
           ),
@@ -194,31 +241,17 @@ class _SurveyScreenState extends State<SurveyScreen> {
           const SizedBox(height: 12),
         ],
         RiskHeader(risk: r),
-        if (r.isResolved) ...[
-          const SizedBox(height: 12),
-          const InfoBanner(
-            icon: Icons.history_edu,
-            text: 'Archive risk: it has already resolved. Answer as if ACAPS had just published it. '
-                'Your forecast matures straight away and you see what actually happened.',
-          ),
-        ],
         const SizedBox(height: 16),
         Text(
-          '${items.length} short ${items.length == 1 ? 'screen' : 'screens'}, about 2 minutes. '
+          '${items.length + 1} short screens, about 2 minutes: '
+          '${items.length == 1 ? 'the risk' : '${items.length} triggers'}, then one forecast. '
           'You answer before you see the group, so your view stays independent.',
           style: t.bodyMedium,
         ),
-        // Always visible: exposure and triggers.
-        if (r.exposure.isNotEmpty) ...[
-          const SectionLabel('Expected exposure'),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Icon(Icons.groups_outlined, size: 20),
-              const SizedBox(width: 8),
-              Expanded(child: Text(r.exposure, style: t.bodyMedium)),
-            ],
-          ),
+        // Always visible: ACAPS's categories (type, priority needs, exposure) and triggers.
+        if (r.type.isNotEmpty || r.needList.isNotEmpty || r.exposureIdx != null) ...[
+          const SectionLabel('Categories'),
+          CategoryChips(r),
         ],
         if (r.triggers.isNotEmpty) ...[
           const SectionLabel('Triggers ACAPS is watching'),
@@ -270,7 +303,7 @@ class _SurveyScreenState extends State<SurveyScreen> {
 }
 
 // ---------------------------------------------------------------------------
-// One trigger, four questions
+// One trigger, three ground-truthing questions (not scored)
 // ---------------------------------------------------------------------------
 
 class _ItemPage extends StatefulWidget {
@@ -365,16 +398,11 @@ class _ItemPageState extends State<_ItemPage> {
         ),
         _Question(
           n: 2,
-          text: 'How likely is it to happen in the next 6 months?',
-          child: ScalePicker(value: d.likelihood, labels: likelihoodLabels, onSelect: (v) => set(() => d.likelihood = v)),
-        ),
-        _Question(
-          n: 3,
           text: 'How bad would it be?',
           child: ScalePicker(value: d.severity, labels: severityLabels, onSelect: (v) => set(() => d.severity = v)),
         ),
         _Question(
-          n: 4,
+          n: 3,
           text: 'What is ACAPS missing?',
           optional: true,
           child: TextField(
@@ -400,6 +428,124 @@ class _ItemPageState extends State<_ItemPage> {
           ],
         ),
       ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The one scored question: will the whole risk materialise in 6 months?
+// ---------------------------------------------------------------------------
+
+/// ACAPS's scale with its ranges, as shown on the forecast buttons.
+final forecastButtonLabels = [for (var i = 0; i < 5; i++) '${levelLabels[i]}\n${probabilityRanges[i]}'];
+
+class _ForecastPage extends StatelessWidget {
+  final Risk risk;
+  final int? value;
+  final ValueChanged<int> onSelect;
+
+  /// The credit choice, on this last screen.
+  final Widget? footer;
+
+  const _ForecastPage({required this.risk, required this.value, required this.onSelect, this.footer});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final by = DateTime.now().add(forecastHorizon);
+    final acaps = risk.acapsLikelihood;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      children: [
+        Row(
+          children: [
+            Icon(Icons.track_changes, size: 16, color: cs.primary),
+            const SizedBox(width: 6),
+            Text('YOUR FORECAST · SCORED',
+                style: TextStyle(fontSize: 11.5, letterSpacing: 1, fontWeight: FontWeight.w800, color: cs.primary)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text('Will this risk materialise before ${formatDate(by)}?', style: t.titleLarge),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
+          child: Text(risk.title, style: t.bodyMedium),
+        ),
+        const SizedBox(height: 20),
+        ScalePicker(value: value, labels: forecastButtonLabels, onSelect: onSelect),
+        const SizedBox(height: 10),
+        Text(
+          [
+            if (value != null) 'You: ${probabilityText(value!)}.',
+            if (acaps != null) 'ACAPS: ${probabilityText(acaps)}.',
+          ].join('  '),
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'This is the one answer that is scored. When ACAPS records whether the risk materialised, '
+          'you get up to 100 points for accuracy. The scale and ranges are ACAPS\'s own, so your '
+          'forecast is scored exactly like theirs.',
+          style: t.bodySmall,
+        ),
+        if (footer != null) ...[const SizedBox(height: 24), footer!],
+      ],
+    );
+  }
+}
+
+/// "If ACAPS publishes this risk, list me as ..." Starts at the expert's
+/// profile anonymity level; they can change it for this risk.
+class CreditPicker extends StatelessWidget {
+  final Expert expert;
+  final Credit value;
+  final ValueChanged<Credit> onChanged;
+  const CreditPicker({super.key, required this.expert, required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final shown = publicCredit(expert, value);
+    final isDefault = value == defaultCredit(expert);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.badge_outlined, size: 20, color: cs.primary),
+                const SizedBox(width: 8),
+                Expanded(child: Text('If ACAPS publishes this risk, credit me as', style: t.titleSmall)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SegmentedButton<Credit>(
+              showSelectedIcon: false,
+              // Same order as the anonymity levels: 1 real name, 2 pseudonym, 3 anonymous.
+              segments: [
+                for (final c in const [Credit.realName, Credit.pseudonym, Credit.anonymous])
+                  ButtonSegment(value: c, label: Text(c.label), enabled: creditAllowed(expert, c)),
+              ],
+              selected: {value},
+              onSelectionChanged: (v) => onChanged(v.first),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${shown == null ? 'Not listed. Your answers only count in the totals.' : 'Listed among contributors as "${shown.name}".'} '
+              'Names are never shown next to answers.'
+              '${isDefault ? ' This matches your profile (level ${expert.level.number}: ${expert.level.label}); you can change it for this risk.' : ''}'
+              '${expert.realName == null ? ' Real name is off: your profile is fully anonymous.' : ''}',
+              style: t.bodySmall,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -466,6 +612,7 @@ class ScalePicker extends StatelessWidget {
                 child: InkWell(
                   borderRadius: BorderRadius.circular(12),
                   onTap: () {
+                    // A light tick, so a tap on a small target is felt.
                     HapticFeedback.selectionClick();
                     onSelect(i);
                   },
@@ -534,12 +681,25 @@ class _Summary extends StatelessWidget {
             ),
           ),
         const SizedBox(height: 14),
+        if (risk.isResolved && mine == null) ...[
+          InfoBanner(
+            icon: Icons.lock_clock_outlined,
+            text: 'This risk has closed. You can see what happened and how the group saw it. '
+                'Answers are no longer accepted, so there are no points here.',
+          ),
+          const SizedBox(height: 12),
+          MaturedBlock(risk: risk),
+          const SizedBox(height: 12),
+        ],
         RespondentsCard(risk: risk, answered: answered, panelSize: panel.length),
         if (risk.isResolved && mine != null) ...[
           const SectionLabel('Your forecast matured'),
           MaturedBlock(risk: risk, response: mine),
         ],
-        // Per question: results, then what colleagues say ACAPS is missing, then the next question.
+        const SectionLabel('Forecast: will it materialise within 6 months?'),
+        ForecastSummary(risk: risk, mine: mine?.forecast),
+        const SectionLabel('Triggers'),
+        // Per trigger: results, then what colleagues say ACAPS is missing, then the next trigger.
         for (var i = 0; i < items.length; i++) ...[
           QuestionHeader(number: i + 1, total: items.length, title: items[i].title),
           ItemSummary(risk: risk, item: items[i], mine: mine?.items[items[i].id]),
@@ -629,6 +789,128 @@ class _SplitRow extends StatelessWidget {
   }
 }
 
+/// Counts per step 1..5.
+List<int> countsOf(Iterable<int> xs) {
+  final c = List.filled(5, 0);
+  for (final x in xs) {
+    c[x - 1]++;
+  }
+  return c;
+}
+
+/// Headline of a group view: the group answer (or "opinions split") in bold,
+/// then how far experts agree.
+class GroupLine extends StatelessWidget {
+  final GroupView group;
+
+  /// Forecast (ACAPS probability words) or "how bad" (1-5).
+  final bool forecast;
+  final String noun;
+  const GroupLine({super.key, required this.group, required this.forecast, required this.noun});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final g = group;
+    final splitColor = agreementColors[Agreement.partly]!;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            if (g.split) ...[Icon(Icons.call_split, size: 18, color: splitColor), const SizedBox(width: 6)],
+            Expanded(
+              child: Text(forecast ? g.probabilityHeadline : g.severityHeadline,
+                  style: t.titleSmall?.copyWith(color: g.split ? splitColor : null)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text('${g.spread(forecast ? levelLabels : const ['1', '2', '3', '4', '5'])} · ${g.n} ${g.n == 1 ? noun : '${noun}s'}',
+            style: t.bodySmall),
+      ],
+    );
+  }
+}
+
+/// How the panel's view moved since the last update cycle (about a month):
+/// "Since 8 Oct 2026: Medium → High · 3 of 7 experts changed their forecast".
+class TrendLine extends StatelessWidget {
+  final Risk risk;
+  const TrendLine({super.key, required this.risk});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final tr = appState.trendOf(risk);
+    if (tr == null) return const SizedBox.shrink();
+    final moved = tr.now.median - tr.then.median;
+    final same = tr.then.short == tr.now.short;
+    final (icon, color) = moved > 0
+        ? (Icons.trending_up, agreementColors[Agreement.no]!)
+        : moved < 0
+            ? (Icons.trending_down, agreementColors[Agreement.yes]!)
+            : (Icons.trending_flat, cs.onSurfaceVariant);
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(120), borderRadius: BorderRadius.circular(10)),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text.rich(
+              TextSpan(children: [
+                TextSpan(text: 'Since ${formatDate(tr.since)}: '),
+                TextSpan(
+                  text: same ? 'no change (${tr.now.short})' : '${tr.then.short} → ${tr.now.short}',
+                  style: TextStyle(fontWeight: FontWeight.w800, color: same ? null : color),
+                ),
+                TextSpan(text: ' · ${tr.changed} of ${tr.now.n} experts changed their forecast'),
+              ]),
+              style: t.bodySmall,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The group's forecasts for the whole risk on the ACAPS scale: the median
+/// as the group answer, the spread, and every answer in the chart with
+/// "you" and ACAPS marked.
+class ForecastSummary extends StatelessWidget {
+  final Risk risk;
+  final int? mine;
+  const ForecastSummary({super.key, required this.risk, required this.mine});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final fs = appState.forecastsFor(risk);
+    final g = GroupView.of(fs);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (g == null)
+              Text('No forecasts yet.', style: t.labelLarge)
+            else
+              GroupLine(group: g, forecast: true, noun: 'forecast'),
+            Distribution(counts: countsOf(fs), mine: mine, acaps: risk.acapsLikelihood, labels: forecastButtonLabels),
+            TrendLine(risk: risk),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class ItemSummary extends StatelessWidget {
   final Risk risk;
   final SurveyItem item;
@@ -659,10 +941,11 @@ class ItemSummary extends StatelessWidget {
             const SizedBox(height: 8),
             AgreementBar(counts: agree, mine: mine?.agree),
             const SizedBox(height: 16),
-            Text('Likelihood in 6 months', style: t.labelLarge),
-            Distribution(counts: count((a) => a.likelihood), mine: mine?.likelihood, acaps: risk.acapsLikelihood),
-            const SizedBox(height: 12),
             Text('How bad it would be', style: t.labelLarge),
+            if (GroupView.of(answers.map((a) => a.severity)) case final g?) ...[
+              const SizedBox(height: 6),
+              GroupLine(group: g, forecast: false, noun: 'answer'),
+            ],
             Distribution(counts: count((a) => a.severity), mine: mine?.severity, acaps: risk.impact),
           ],
         ),
@@ -812,7 +1095,10 @@ class Distribution extends StatelessWidget {
   final List<int> counts;
   final int? mine;
   final int? acaps;
-  const Distribution({super.key, required this.counts, this.mine, this.acaps});
+
+  /// Words under the numbers (e.g. the ACAPS probability ranges).
+  final List<String>? labels;
+  const Distribution({super.key, required this.counts, this.mine, this.acaps, this.labels});
 
   @override
   Widget build(BuildContext context) {
@@ -852,9 +1138,14 @@ class Distribution extends StatelessWidget {
                 cell(Column(
                   children: [
                     Text('$i', style: TextStyle(fontWeight: mine == i ? FontWeight.w800 : FontWeight.w500)),
+                    if (labels != null)
+                      Text(labels![i - 1],
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 9.5, height: 1.15, color: cs.onSurfaceVariant)),
                     if (mine == i)
                       const Text('you are here', textAlign: TextAlign.center, style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800)),
-                    if (acaps == i) const Padding(padding: EdgeInsets.only(top: 2), child: Pill('ACAPS')),
+                    if (acaps == i)
+                      const Padding(padding: EdgeInsets.only(top: 2), child: FittedBox(fit: BoxFit.scaleDown, child: Pill('ACAPS'))),
                   ],
                 )),
             ],
@@ -865,16 +1156,17 @@ class Distribution extends StatelessWidget {
   }
 }
 
-/// Outcome of a matured forecast, styled like the risk card.
+/// Outcome of a closed risk, styled like the risk card. With [response], also
+/// the expert's score for the forecast they made while it was open.
 class MaturedBlock extends StatelessWidget {
   final Risk risk;
-  final Response response;
-  const MaturedBlock({super.key, required this.risk, required this.response});
+  final Response? response;
+  const MaturedBlock({super.key, required this.risk, this.response});
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
-    final s = appState.scoreOf(response);
+    final s = response == null ? null : appState.scoreOf(response!);
     final happened = risk.materialised;
     final accent = happened ? AppColors.high : scaleColors[1];
     final text = risk.materialisation.length > 360 ? '${risk.materialisation.substring(0, 360).trimRight()}…' : risk.materialisation;
@@ -888,16 +1180,41 @@ class MaturedBlock extends StatelessWidget {
             children: [
               Icon(happened ? Icons.warning_amber_rounded : Icons.shield_outlined, color: accent),
               const SizedBox(width: 8),
-              Text(happened ? 'What happened: it materialised' : 'What happened: it did not materialise',
-                  style: t.titleSmall?.copyWith(color: accent)),
+              Expanded(
+                child: Text(happened ? 'What happened: it materialised' : 'What happened: it did not materialise',
+                    style: t.titleSmall?.copyWith(color: accent)),
+              ),
             ],
           ),
           if (text.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(text, style: t.bodySmall?.copyWith(height: 1.45)),
           ],
+          if (risk.fromEarlierList) ...[
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.history_toggle_off, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'From ACAPS\'s earlier risk list: it resolved over a longer period than 6 months, '
+                    'so scores on it are indicative, not a true 6-month forecast.',
+                    style: t.bodySmall?.copyWith(fontStyle: FontStyle.italic),
+                  ),
+                ),
+              ],
+            ),
+          ],
           if (s != null) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
+            Text(
+              'Your forecast: ${probabilityText(response!.forecast!)}'
+              '${risk.acapsLikelihood == null ? '' : ' · ACAPS: ${probabilityText(risk.acapsLikelihood!)}'}',
+              style: t.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
             Row(
               children: [
                 ScoreBox(label: 'Your accuracy', value: '${accuracyPct(s.mine)}%', highlight: true),
@@ -910,7 +1227,7 @@ class MaturedBlock extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               '${s.mine < s.acaps - 0.005 ? 'You were closer than ACAPS.' : s.mine > s.acaps + 0.005 ? 'ACAPS was closer this time.' : 'Same as ACAPS.'} '
-              'Accuracy: how close your "how likely" answers were to what happened (100% = perfect). Only likelihood is scored.',
+              'Accuracy: how close your forecast was to what happened (100% = perfect). Only the forecast is scored.',
               style: t.bodySmall,
             ),
           ],
@@ -966,7 +1283,10 @@ class CommentCard extends StatelessWidget {
     final me = appState.me;
     final isMine = me != null && c.authorId == me.id;
     final item = items.where((i) => i.id == c.itemId).firstOrNull;
-    final rc = appState.byId(c.riskId) == null ? <String>[] : AppState.riskCountries(appState.byId(c.riskId)!);
+    final risk = appState.byId(c.riskId);
+    final rc = risk == null ? <String>[] : AppState.riskCountries(risk);
+    // Closed risks are read-only, reactions included.
+    final canReact = me != null && !isMine && !(risk?.isResolved ?? false);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
@@ -1010,7 +1330,7 @@ class CommentCard extends StatelessWidget {
                     ids: c.agreeIds,
                     riskCountries: rc,
                     active: me != null && c.agreeIds.contains(me.id),
-                    onTap: me == null || isMine ? null : () => appState.react(c, true),
+                    onTap: canReact ? () => appState.react(c, true) : null,
                   ),
                   _ReactChip(
                     icon: Icons.thumb_down_alt_outlined,
@@ -1018,8 +1338,9 @@ class CommentCard extends StatelessWidget {
                     ids: c.disagreeIds,
                     riskCountries: rc,
                     active: me != null && c.disagreeIds.contains(me.id),
-                    onTap: me == null || isMine ? null : () => appState.react(c, false),
+                    onTap: canReact ? () => appState.react(c, false) : null,
                   ),
+                  // Phones have no hover: a sheet shows where those experts come from.
                   ActionChip(
                     avatar: const Icon(Icons.public, size: 16),
                     label: const Text('Who?'),

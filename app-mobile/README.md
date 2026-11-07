@@ -1,87 +1,80 @@
 # Ground Truth: phone version
 
-A copy of `../app` adapted for phones. `../app` stays unchanged as the reference version.
+The phone version of [`../app`](../app/README.md). It has the same features: sign-up with an invite or referral
+code, log in, referral codes and progress, moderator invites, search and filters, the survey, group view, rating and
+the expert-input export. The full flow is described in `../app/README.md`.
 
 What is different from `../app`:
-- Portrait only. The Android app name is "Ground Truth" and its application ID is `com.example.ground_truth.mobile`, so it installs next to `../app` instead of replacing it.
-- Agree/disagree: a **Who?** button opens a sheet with where those experts are from, since phones have no hover. The moderator gets the same on tap.
-- Rating: the scope (my country / my region / all) is a row of chips that scrolls sideways.
-- Moderator on a phone: search plus a **Filters** button that opens a sheet with all filters and sorting, with active filters as removable chips. Overview tiles are two per row. Comment filters are chips. Panel filters fold away.
-- Light vibration when picking 1-5. The country search is no longer hidden behind the keyboard.
 
-### Run on an Android phone (wireless debugging)
+- **Risks come from the ACAPS Risk Radar API, not from the CSV in this repo.** The app reads the Supabase `risks`
+  table, which [`../scripts/sync_risks.dart`](../scripts/sync_risks.dart) keeps equal to the live API (see *Risks*
+  below). There is no bundled CSV.
+- **No Import, Sync statuses or New risk for moderators.** Risks are ACAPS's own and arrive through the sync.
+  The Risks tab shows where they come from (`ACAPS Risk Radar · 137 risks · updated 7 Nov 2026`) and a
+  *Refresh* button. Experts see the same line on their Risks tab.
+- **Demo risk R1055** (mass returns from eastern Chad to West Darfur) instead of R1043: R1043 is no longer in the
+  Risk Radar API. R1055 has the same storyline (the panel moved from Medium to High over the last month), and
+  the seeded comments are about its triggers.
+- Phone tweaks: portrait only; a **Who?** chip (experts) and *tap for countries* (moderators) open a sheet with
+  where agreeing / disagreeing experts come from, since phones have no hover; a light vibration when picking 1–5;
+  the rating scope is a row of chips that scrolls sideways; the country search stays above the keyboard.
+- Android app name "Ground Truth", application ID `com.example.ground_truth.mobile`, so it installs next to `../app`.
 
-Needs the Android SDK (Android Studio or the command-line tools). Pair the phone once via *Developer options → Wireless debugging*, then:
+## Risks
 
-```bash
-cd app-mobile
-flutter pub get
-flutter devices                 # the phone shows up as e.g. "SM A366B (wireless)"
-flutter run -d <device-id>      # copy the id from `flutter devices`
+```
+ACAPS Risk Radar API --(scripts/sync_risks.dart, secret key)--> Supabase `risks` --(read only)--> app-mobile
 ```
 
-In VS Code you can instead pick the phone in the device selector (status bar) and start **app-mobile (phone)** from *Run and Debug*. The first Android build downloads Gradle and takes a few minutes.
-
-### Real login (Supabase)
-
-Started with the Supabase keys, the app shows a **Log in** button on the first screen. Experts log in with
-pseudonym + password, moderators with email + password (same accounts as [`../auth-lab/`](../auth-lab/README.md)):
-
-```powershell
-./app-mobile/run.ps1 -Device <device-id>    # reads SUPABASE_URL + SUPABASE_PUBLISHABLE_KEY from ../API.key
-```
-
-- Sign-up is not in this app yet: create accounts in `auth-lab` with an invite code.
-- After login the app still runs on local demo data. The Supabase profile only decides who you are: a moderator
-  opens the moderator view, an expert gets a local profile created from their `profiles` row the first time.
-  Profile edits in the app are not sent back to Supabase.
-- Plain `flutter run` (or VS Code Run and Debug) has no keys: the Log in button is hidden and only demo users work.
-
-### Run without the Android SDK
-
-`flutter run -d web-server --web-hostname 0.0.0.0 --web-port 8080`, then open `http://<this computer's IP>:8080` on a phone on the same Wi-Fi.
-
----
-
-
-A mobile-first prototype of an expert loop for ACAPS risk analysis.
-
-## Flow
-
-Principle: individual contributions are never shown to the public.
-
-1. **Entry:** the groups are closed, so you need an ACAPS QR code to get in (demo codes `GT-CHAD-7Q4X` and `GT-SDN-3K9M`, or tap *Scan QR code (demo)*). Then you pick a synthetic demo user (no passwords in the MVP), sign in as the **ACAPS moderator**, or create a profile.
-2. **Anonymity levels:** 1 = known to ACAPS, 2 = known to colleagues by pseudonym, 3 = fully anonymous. We only ask for a real name at levels 1 and 2. Moving to level 3 deletes it (`real_name: null` in the database, visible under Moderator → Experts). Moving back from level 3 asks for the name again. Every name shown in the app comes from `displayName(expert, viewer)` in `lib/identity.dart`. Experts at level 1 or 2 can also tick "Stay anonymous to colleagues from other countries": colleagues from their own country still see the pseudonym, everyone else sees "Anonymous expert".
-3. **Survey (demo risk R1043):** a notification ("ACAPS updated a risk in Chad. Got 2 minutes?"), which you can skip. Then a one-line intro with *More details* and *Start*. Then one screen per trigger (max 3), each with 4 questions: agree with ACAPS (yes/partly/no), likelihood in 6 months (1-5), how bad (1-5), and what ACAPS is missing (optional).
-4. **Group summary:** per question: the results, then what colleagues say ACAPS is missing, then the next question. how many have answered (e.g. 6 of 8), distributions marked "you are here" and "ACAPS", and colleagues' comments with agree/disagree. Hovering (or long-pressing) agree/disagree shows where those experts come from. A country is named only if at least 3 of them are from it; the rest are shown as "other countries". You can *Change answer* or tap *Done*.
-5. **My forecasts:** open forecasts can be edited. Matured ones show what actually happened, styled like the risk card. Archive risks mature instantly, so the demo doesn't have to wait 6 months, and the demo personas come with simulated history.
-6. **Rating (opt-in):** 100 × (1 − Brier) points per matured forecast. Only likelihood is scored. +25 for a comment a moderator marks useful, +50 for a comment used in another risk's analysis. Badges: Super estimator, Useful insight, Cited in analysis, Regular.
-7. **Moderator** (side rail on desktop, bottom bar on phones; `?tab=risks` opens a tab directly):
-   - *Overview*: comments waiting for review, risks where experts see it differently from ACAPS (likelihood gap and disagreement), countries that need recruiting.
-   - *Risks*: search, Active/Archive/All, region, country, sort (to review, disagreement, likelihood gap, response rate, risk level), "only with comments to review", and a slider for minimum disagreement with ACAPS. A risk opens a review page (next to the list on desktop): for each question the results, then the comments right underneath, each with *Useful*, *Use in analysis* (pick the risk) and *Mark reviewed*. Plus a public preview (aggregates only).
-   - *Panels*: every country with panel size against the minimum of 3 and the target of 5-10, response rate, region filter and sorting. Each expert opens a sheet with their stats and the raw database record (`real_name: null` at level 3).
-   - *Rating*: the same as experts see it.
-
-8. **Opening from a notification:** a tapped notification opens the app with `?risk=R1043` and goes straight to that card. Without a link, a new or updated risk waiting for you opens as a pop-up once per launch (*Not now* skips it).
-9. **My answers** (Profile): every answer with the risk status (in progress / happened / did not happen), accuracy, and what happened to your comments (marked useful, used in another analysis, agree/disagree).
-10. **Display:** light, dark or high-contrast theme, and text size from 85% to 150% in 5% steps (Profile, or the text icon on the entry and moderator screens).
-
-All experts are synthetic. Their answers are simulated deterministically from the ACAPS rating plus a per-expert "skill". Your profile, answers and comments are saved on the device (`shared_preferences`). **Profile → Reset demo** wipes them.
-
-Not done yet: real QR scanning, passwords, real push notifications, translations, topics, AI support for moderators.
+- The app **never calls the ACAPS API and never writes risks.** It reads `risks` with the publishable key at every
+  launch (and on *Refresh*), and keeps a copy on the device.
+- **Offline:** the app uses that copy and says so ("Offline copy of the ACAPS Risk Radar …"). On a first launch with
+  no connection and no copy, it shows *Could not load the risks* with *Retry*.
+- **Updating the database:** from the repo root, `dart run scripts/sync_risks.dart`
+  (`--dry-run` to only compare). It writes **only what changed**: if Supabase already matches the API it prints
+  *already up to date* and writes nothing. Risks the API no longer lists are deleted (unless `--keep-removed`, and
+  never when the API returns less than half of what Supabase has). It needs `SUPABASE_URL`, `SUPABASE_SECRET_KEY`,
+  `ACAPS_EMAIL` and `ACAPS_PASSWORD` (environment variables or `../API.key`).
+- Answers, comments and points are still kept on the device; a risk that closes in the Risk Radar moves to the
+  Archive and the forecasts already given on it get scored.
 
 ## Run
 
-Requires the [Flutter SDK](https://docs.flutter.dev/get-started/install) (3.22 or newer).
+Requires the [Flutter SDK](https://docs.flutter.dev/get-started/install) (3.22 or newer) and the git-ignored
+`../API.key` with `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`.
+
+```powershell
+./app-mobile/run.ps1 -Device <device-id>    # passes only the URL and the publishable key, never the secret key
+```
+
+In VS Code, *Run and Debug* → **app-mobile (phone)** or **app-mobile (Edge)** does the same: a pre-launch task
+writes `.dart_tool/supabase_keys.json` with only those two values (`tool/supabase_keys.dart`).
+
+- **First moderator:** *I have a code* → `GT-ACAPS-MOD1` → name, work email, password.
+- **Invite an expert:** as moderator, the key button → *Copy invitation message* → send it. The expert types the
+  code, fills in the form with a password, and is in. Their own `REF-…` referral code is on their Profile.
+- **Log in later:** *Log in* → pseudonym (experts) or email (moderators) + password.
+
+Plain `flutter run` (no keys) starts without Supabase: only the demo users and local codes, and risks only if this
+device saved a copy before.
+
+### Android phone (wireless debugging)
+
+Needs the Android SDK. Pair the phone once via *Developer options → Wireless debugging*, then
+`flutter devices` shows it (e.g. "SM A366B (wireless)") and `./app-mobile/run.ps1 -Device <device-id>` runs on it.
+The first Android build downloads Gradle and takes a few minutes.
+
+Without the Android SDK: `flutter run -d web-server --web-hostname 0.0.0.0 --web-port 8080 --dart-define-from-file=.dart_tool/supabase_keys.json`,
+then open `http://<this computer's IP>:8080` on a phone on the same Wi-Fi.
+
+## Tests
 
 ```bash
 cd app-mobile
-flutter pub get
-flutter run -d edge        # or -d chrome, or an Android emulator / device
-flutter test
-dart run tool/identity_check.dart   # anonymity rules, runs without the Flutter test device
+flutter test                          # uses test/fixtures/risks.json, a snapshot of the synced risks table
+dart run tool/identity_check.dart     # anonymity rules, without the Flutter test device
 ```
 
-On Windows, building for the Windows desktop target needs Developer Mode, because of plugin symlinks. The web target doesn't.
+Tests never call Supabase. Refresh the snapshot after a sync with the command in `test/fixture_risks.dart`.
 
-`flutter create .` only generates the missing platform folders. It does not overwrite `lib/`.
+All experts and their answers are synthetic. **Profile → Reset demo** wipes the local demo data (the risks stay).

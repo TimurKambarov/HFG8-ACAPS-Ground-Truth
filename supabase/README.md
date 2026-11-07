@@ -10,13 +10,16 @@
    files replace the sign-up function).
 2. **Turn off "Confirm email".** Authentication → Sign In / Providers → Email. Expert logins use made-up
    addresses that cannot receive mail (see *Auth and credentials*).
-3. **Load the Risk Radar data.** From the repo root:
+3. **Load the risks from the ACAPS Risk Radar API.** From the repo root:
    ```bash
-   pip install -r requirements.txt
-   python scripts/load_risks_to_supabase.py
+   dart run scripts/sync_risks.dart --dry-run   # compare only
+   dart run scripts/sync_risks.dart             # write
    ```
-   It reads `SUPABASE_URL` and `SUPABASE_SECRET_KEY` from the environment or from the
-   git-ignored `API.key` file. It is safe to re-run after the CSV changes.
+   It reads `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `ACAPS_EMAIL` and `ACAPS_PASSWORD` from the
+   environment or from the git-ignored `API.key` file. It writes only what changed (an up-to-date
+   database is left untouched) and deletes risks the API no longer lists (`--keep-removed` keeps them).
+   `app-mobile` reads these tables and nothing else. The older `python scripts/load_risks_to_supabase.py`
+   loads the CSV export instead; don't use it any more, because it would bring back risks that ACAPS has removed.
 4. **Make a moderator.** Start the app with real accounts (`./app/run.ps1`, see [`app/README.md`](../app/README.md)),
    tap *I have a code* and enter the moderator code `GT-ACAPS-MOD1`. **Authentication → Users → Add user** no longer works, because
    sign-up requires an invite code.

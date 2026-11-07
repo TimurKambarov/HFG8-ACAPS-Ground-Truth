@@ -3,8 +3,11 @@
 /// Principle: individual contributions are never shown to the public.
 /// Every screen that shows an expert's name goes through [displayName];
 /// nothing else in the UI reads [Expert.realName] or [Expert.pseudonym]
-/// for display (the profile editor only edits your own fields).
+/// for display (the profile editor only edits your own fields). The one
+/// exception is [publicCredit]: names an expert chose to have published.
 library;
+
+import 'models.dart';
 
 enum Anonymity {
   /// Level 1: ACAPS knows your real name; colleagues see your pseudonym.
@@ -62,6 +65,18 @@ const pseudonymRule = '3-30 letters, digits, - or _. This is also your login nam
 int stableHash(String s) =>
     s.codeUnits.fold<int>(7, (a, b) => (a * 31 + b) % 1000003);
 
+/// How an expert got into the closed group: the door check. Shown to
+/// moderators only, as a trust signal; never to colleagues, the public, or
+/// the expert themselves. It says how they got in, not who they are.
+enum JoinedVia { acapsInvite, expertReferral }
+
+extension JoinedViaText on JoinedVia {
+  String get label => switch (this) {
+        JoinedVia.acapsInvite => 'Invited by ACAPS',
+        JoinedVia.expertReferral => 'Referred by an expert',
+      };
+}
+
 /// An expert record as stored in the database. All demo experts are synthetic.
 class Expert {
   final String id;
@@ -89,7 +104,16 @@ class Expert {
   final double participation;
   final double skill;
 
+  /// This expert's permanent referral code (one per expert, any
+  /// number of colleagues can join with it). Assigned by the store.
+  String referralCode;
+
+  /// Moderator invite or expert referral. Set once, at registration.
+  final JoinedVia joinedVia;
+
   Expert({
+    this.referralCode = '',
+    this.joinedVia = JoinedVia.acapsInvite,
     required this.id,
     required this.realName,
     required this.pseudonym,
@@ -141,6 +165,8 @@ class Expert {
         'persona': persona,
         'participation': participation,
         'skill': skill,
+        'referral_code': referralCode,
+        'joined_via': joinedVia == JoinedVia.acapsInvite ? 'acaps_invite' : 'expert_referral',
       };
 
   factory Expert.fromJson(Map<String, dynamic> m) => Expert(
@@ -157,6 +183,9 @@ class Expert {
         persona: m['persona'] == true,
         participation: (m['participation'] as num?)?.toDouble() ?? 0.8,
         skill: (m['skill'] as num?)?.toDouble() ?? 0.5,
+        referralCode: (m['referral_code'] as String?) ?? '',
+        // Saved before this existed: everyone had joined with an ACAPS invite.
+        joinedVia: m['joined_via'] == 'expert_referral' ? JoinedVia.expertReferral : JoinedVia.acapsInvite,
       );
 }
 
@@ -196,6 +225,30 @@ String displayName(Expert expert, Viewer viewer) {
       }
       return expert.pseudonym;
   }
+}
+
+/// Credit in a published report when the expert has not chosen for this
+/// risk: matches the anonymity level they picked for their profile (level 1:
+/// real name, 2: pseudonym, 3: anonymous). They can change it per risk.
+Credit defaultCredit(Expert e) => switch (e.level) {
+      Anonymity.knownToAcaps => Credit.realName,
+      Anonymity.pseudonymous => Credit.pseudonym,
+      Anonymity.anonymous => Credit.anonymous,
+    };
+
+/// Real name is only possible while one is stored (not at level 3).
+bool creditAllowed(Expert e, Credit c) => c != Credit.realName || e.realName != null;
+
+/// The name to list among a published risk's contributors, or null to keep
+/// the expert out of the list. Only the expert's own choice (or their profile
+/// default) puts a name here; a real name deleted at level 3 is never used.
+({String name, Credit as})? publicCredit(Expert e, Credit? chosen) {
+  final c = chosen ?? defaultCredit(e);
+  return switch (c) {
+    Credit.realName => e.realName == null ? null : (name: e.realName!, as: Credit.realName),
+    Credit.pseudonym => (name: e.pseudonym, as: Credit.pseudonym),
+    Credit.anonymous => null,
+  };
 }
 
 /// Where a group of experts comes from, split into the risk's own

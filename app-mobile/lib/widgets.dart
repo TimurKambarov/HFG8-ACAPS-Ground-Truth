@@ -28,6 +28,69 @@ class SectionLabel extends StatelessWidget {
   }
 }
 
+/// A risk's ACAPS categories as chips: risk type, expected priority needs
+/// and expected exposure (as on the ACAPS website). Shows only what ACAPS
+/// recorded. [compact] (risk cards): the type and up to [maxNeeds] needs.
+class CategoryChips extends StatelessWidget {
+  final Risk risk;
+  final bool compact;
+  final int maxNeeds;
+  const CategoryChips(this.risk, {super.key, this.compact = false, this.maxNeeds = 3});
+
+  static IconData typeIcon(String type) {
+    final t = type.toLowerCase();
+    if (t.startsWith('new')) return Icons.fiber_new_outlined;
+    if (t.startsWith('marked')) return Icons.trending_down;
+    return Icons.flood_outlined;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final needs = risk.needList;
+    final shown = compact ? needs.take(maxNeeds).toList() : needs;
+    final chips = <Widget>[
+      if (risk.type.isNotEmpty)
+        Tooltip(
+          message: 'Risk type: ${risk.type}',
+          child: _Chip(compact ? risk.shortType : risk.type, typeIcon(risk.type), cs.primary),
+        ),
+      for (final n in shown) Tooltip(message: 'Expected priority need', child: _Chip(n, Icons.sell_outlined, cs.onSurfaceVariant)),
+      if (compact && needs.length > shown.length) _Chip('+${needs.length - shown.length}', null, cs.onSurfaceVariant),
+      if (!compact && risk.exposureIdx != null)
+        Tooltip(
+          message: 'Expected exposure: people who may need additional assistance',
+          child: _Chip('${risk.exposure} people', Icons.groups_outlined, cs.onSurfaceVariant),
+        ),
+    ];
+    if (chips.isEmpty) return const SizedBox.shrink();
+    return Wrap(spacing: 6, runSpacing: 6, children: chips);
+  }
+}
+
+class _Chip extends StatelessWidget {
+  final String text;
+  final IconData? icon;
+  final Color color;
+  const _Chip(this.text, this.icon, this.color);
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withAlpha(110)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[Icon(icon, size: 13, color: color), const SizedBox(width: 4)],
+            Flexible(child: Text(text, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: color))),
+          ],
+        ),
+      );
+}
+
 class LevelBadge extends StatelessWidget {
   final String level;
   const LevelBadge(this.level, {super.key});
@@ -76,7 +139,8 @@ class Pill extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[Icon(icon, size: 13, color: fg), const SizedBox(width: 4)],
-          Text(text, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: fg)),
+          // Wraps instead of overflowing when the pill is wider than its space.
+          Flexible(child: Text(text, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: fg))),
         ],
       ),
     );
@@ -213,6 +277,7 @@ class RiskTile extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final me = appState.me;
     final done = me != null && appState.responseOf(me, risk) != null;
+    final skipped = !done && risk.isActive && appState.isSkipped(risk);
     final stripe = risk.isResolved ? cs.tertiary : levelColor(risk.level);
     final n = risk.surveyItems.length;
 
@@ -222,7 +287,7 @@ class RiskTile extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => SurveyScreen(risk: risk, start: done ? SurveyStart.summary : SurveyStart.intro),
+            builder: (_) => SurveyScreen(risk: risk, start: done || risk.isResolved ? SurveyStart.summary : SurveyStart.intro),
           )),
           child: IntrinsicHeight(
             child: Row(
@@ -250,7 +315,8 @@ class RiskTile extends StatelessWidget {
                                 ),
                               ),
                             ),
-                            if (risk.isResolved) const Pill('Archive', icon: Icons.history_edu),
+                            if (risk.isResolved) const Pill('Closed', icon: Icons.history_edu),
+                            if (skipped) const Pill('Skipped', icon: Icons.snooze_outlined),
                           ],
                         ),
                         const SizedBox(height: 6),
@@ -260,15 +326,24 @@ class RiskTile extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, height: 1.3),
                         ),
+                        const SizedBox(height: 8),
+                        CategoryChips(risk, compact: true),
                         const SizedBox(height: 10),
                         Row(
                           children: [
                             LevelBadge(risk.level),
-                            const Spacer(),
-                            done
-                                ? Icon(Icons.check_circle, color: cs.primary, size: 22)
-                                : Text(trailing ?? '$n ${n == 1 ? 'question' : 'questions'} · 2 min',
-                                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                            const SizedBox(width: 10),
+                            // Shrinks and wraps on narrow phones instead of overflowing.
+                            Expanded(
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: done && !risk.isResolved
+                                    ? Icon(Icons.check_circle, color: cs.primary, size: 22)
+                                    : Text(trailing ?? '${n + 1} short screens · 2 min',
+                                        textAlign: TextAlign.end,
+                                        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                              ),
+                            ),
                           ],
                         ),
                       ],
@@ -321,7 +396,7 @@ class RiskHeader extends StatelessWidget {
           Text(risk.oneLiner, style: t.titleMedium),
           const SizedBox(height: 10),
           Text(
-            'ACAPS: ${p == null ? 'unrated' : '${levelLabels[p].toLowerCase()} probability'}'
+            'ACAPS: ${p == null ? 'unrated' : '${levelLabels[p].toLowerCase()} probability (${probabilityRanges[p]})'}'
             '${risk.impact == null ? '' : ' · impact ${risk.impact}/5'}',
             style: t.bodySmall,
           ),
@@ -462,6 +537,43 @@ void showDisplaySettings(BuildContext context) => showModalBottomSheet<void>(
 String formatDate(DateTime d) {
   const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return '${d.day} ${m[d.month - 1]} ${d.year}';
+}
+
+/// Where the risks on screen come from, with a Refresh button: the live ACAPS
+/// Risk Radar (via Supabase), or the copy on this device when offline.
+class RiskSourceLine extends StatelessWidget {
+  const RiskSourceLine({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final at = appState.risksSyncedAt;
+    final offline = appState.risksFromCache;
+    final text = offline
+        ? 'Offline copy of the ACAPS Risk Radar${at == null ? '' : ' (updated ${formatDate(at)})'}. ${appState.risksProblem ?? ''}'
+        : 'ACAPS Risk Radar · ${appState.risks.length} risks${at == null ? '' : ' · updated ${formatDate(at)}'}';
+    return Row(
+      children: [
+        Icon(offline ? Icons.cloud_off_outlined : Icons.cloud_done_outlined, size: 16, color: offline ? cs.error : cs.onSurfaceVariant),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(text.trim(), style: t.bodySmall?.copyWith(color: offline ? cs.error : null)),
+        ),
+        appState.refreshingRisks
+            ? const Padding(
+                padding: EdgeInsets.all(12),
+                child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+              )
+            : IconButton(
+                tooltip: 'Load the latest risks',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.refresh, size: 20),
+                onPressed: appState.refreshRisks,
+              ),
+      ],
+    );
+  }
 }
 
 /// Phones have no hover: a tap shows where agreeing / disagreeing experts come from.

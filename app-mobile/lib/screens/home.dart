@@ -4,6 +4,7 @@ import '../models.dart';
 import '../store.dart';
 import '../widgets.dart';
 import 'profile.dart';
+import 'risk_filter.dart';
 import 'survey.dart';
 
 class HomeShell extends StatefulWidget {
@@ -20,20 +21,72 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     // Entering the app from a notification, or with a new/updated risk waiting:
-    // open that card straight away.
+    // a centred pop-up for that risk.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final r = appState.takeAutoOpen();
       if (r == null || !mounted) return;
-      final answered = appState.responseOf(appState.me!, r) != null;
-      Navigator.of(context).push(MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (_) => SurveyScreen(
-          risk: r,
-          start: answered ? SurveyStart.summary : SurveyStart.intro,
-          fromNotification: true,
-        ),
-      ));
+      _showRiskPopup(r);
     });
+  }
+
+  Future<void> _showRiskPopup(Risk r) async {
+    final answered = appState.responseOf(appState.me!, r) != null;
+    final closed = r.isResolved;
+    final n = r.surveyItems.length;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        final t = Theme.of(context).textTheme;
+        return AlertDialog(
+          icon: const Icon(Icons.notifications_active_outlined),
+          title: Text(closed ? 'This risk has closed' : 'ACAPS updated this risk'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  RiskHeader(risk: r),
+                  if (r.title != r.oneLiner) ...[
+                    const SizedBox(height: 10),
+                    Text(r.title, style: t.titleSmall),
+                  ],
+                  const SizedBox(height: 14),
+                  Text(
+                    closed
+                        ? 'See what happened and how the group saw it. Answers are no longer accepted.'
+                        : answered
+                            ? 'You already answered. See how colleagues see it now, or change your answer.'
+                            : 'Got 2 minutes? ${n + 1} short screens: '
+                                '${n == 1 ? 'the risk' : '$n triggers'}, then one forecast. '
+                                'You answer before you see the group, so your view stays independent.',
+                    style: t.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: Text(closed ? 'Close' : 'Not now')),
+            FilledButton(
+              // The theme makes filled buttons full width; dialog actions need a finite size.
+              style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(closed ? 'See what happened' : (answered ? 'See group summary' : 'Start')),
+            ),
+          ],
+        );
+      },
+    );
+    if (!mounted) return;
+    if (go == true) {
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => SurveyScreen(risk: r, start: answered || closed ? SurveyStart.summary : SurveyStart.questions),
+      ));
+    } else if (go == false && !answered && r.isActive) {
+      notNow(context, r); // explicit "Not now", same as on the banner and the survey intro
+    }
   }
 
   @override
@@ -64,20 +117,47 @@ class _HomeShellState extends State<HomeShell> {
 // Risks
 // ---------------------------------------------------------------------------
 
-class InboxTab extends StatelessWidget {
+class InboxTab extends StatefulWidget {
   const InboxTab({super.key});
+
+  @override
+  State<InboxTab> createState() => _InboxTabState();
+}
+
+class _InboxTabState extends State<InboxTab> {
+  bool _allArchive = false;
+  bool _archiveMineOnly = false;
+  final _search = TextEditingController();
+
+  /// The same search, filters and sort as the moderators' Risks tab.
+  final _filter = RiskFilter(defaultSort: RiskSort.recommended);
+
+  @override
+  void dispose() {
+    _search.dispose();
+    _filter.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     return ListenableBuilder(
-      listenable: appState,
+      listenable: Listenable.merge([appState, _filter]),
       builder: (context, _) {
         final me = appState.me;
         if (me == null) return const SizedBox();
-        final note = appState.pendingNotification;
-        final active = appState.activeForMe();
-        final practice = appState.practiceForMe();
+        final f = _filter;
+        if (_search.text != f.query) _search.text = f.query;
+        final searching = f.active;
+        final note = searching ? null : appState.pendingNotification;
+        final active = f.applyBasic(appState.activeForMe());
+        final allClosed = f.applyBasic(appState.archiveForMe());
+        final mineClosed = allClosed.where((r) => appState.relevantTo(me, r)).toList();
+        final archive = _archiveMineOnly ? mineClosed : allClosed;
+        // While searching or filtering, show every match.
+        final shownArchive = _allArchive || searching ? archive : archive.take(5);
+        final n = f.sheetCount;
 
         return ListView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -85,13 +165,106 @@ class InboxTab extends StatelessWidget {
             Text('Hi, ${displayName(me, appState.viewer)}', style: t.headlineSmall),
             const SizedBox(height: 4),
             Text('Your countries: ${([me.homeCountry, ...me.interests]).join(', ')}', style: t.bodySmall),
-            if (note != null) ...[const SizedBox(height: 16), _Notification(risk: note)],
-            SectionLabel('Active risks in your countries · ${active.length}'),
-            if (active.isEmpty) Text('No active risks right now.', style: t.bodySmall),
-            for (final r in active) RiskTile(risk: r),
-            if (practice.isNotEmpty) ...[
-              const SectionLabel('Archive · practise and see what happened'),
-              for (final r in practice.take(5)) RiskTile(risk: r, trailing: 'matures instantly'),
+            const RiskSourceLine(),
+            const SizedBox(height: 4),
+            // Search + filter button, exactly as on the moderators' Risks tab.
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _search,
+                    decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search), hintText: 'Search ID, title, country or category', isDense: true),
+                    onChanged: (v) => f.update((x) => x.query = v),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Badge(
+                  isLabelVisible: n > 0,
+                  label: Text('$n'),
+                  child: IconButton.filledTonal(
+                    tooltip: 'Filter and sort',
+                    onPressed: () => showRiskFilterSheet(context, f, moderator: false),
+                    icon: const Icon(Icons.tune),
+                  ),
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 10, bottom: 2),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${active.length + allClosed.length} ${active.length + allClosed.length == 1 ? 'risk' : 'risks'} · ${f.sort.label.toLowerCase()}',
+                      style: t.labelLarge,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (searching) TextButton(onPressed: () => f.update((x) => x.clear()), child: const Text('Clear')),
+                ],
+              ),
+            ),
+            if (searching && active.isEmpty && allClosed.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('No risks match. Try a risk number (e.g. 1055), a word from the title, a country or a category.',
+                    style: t.bodyMedium),
+              ),
+            // Slides away after "Not now", so it is obvious the tap worked.
+            AnimatedSize(
+              duration: const Duration(milliseconds: 280),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.topCenter,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                child: note == null
+                    ? const SizedBox(width: double.infinity, key: ValueKey('no-banner'))
+                    : Padding(
+                        key: ValueKey(note.id),
+                        padding: const EdgeInsets.only(top: 16),
+                        child: _Notification(risk: note),
+                      ),
+              ),
+            ),
+            if (!searching || active.isNotEmpty) ...[
+              SectionLabel('Active risks in your countries · ${active.length}'),
+              if (active.isEmpty) Text('No active risks right now.', style: t.bodySmall),
+              for (final r in active) RiskTile(risk: r),
+            ],
+            if (allClosed.isNotEmpty) ...[
+              SectionLabel('Archive · see what happened · ${allClosed.length}'),
+              Text('Every risk that has closed, including ones from before you joined. '
+                  'You can read the outcome and the group view, but not answer them.',
+                  style: t.bodySmall),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: SegmentedButton<bool>(
+                  showSelectedIcon: false,
+                  segments: [
+                    ButtonSegment(value: false, label: Text('All countries · ${allClosed.length}')),
+                    ButtonSegment(value: true, label: Text('My countries · ${mineClosed.length}')),
+                  ],
+                  selected: {_archiveMineOnly},
+                  onSelectionChanged: (v) => setState(() => _archiveMineOnly = v.first),
+                ),
+              ),
+              const SizedBox(height: 4),
+              if (archive.isEmpty) Text('No closed risks in your countries yet.', style: t.bodySmall),
+              for (final r in shownArchive)
+                RiskTile(
+                  risk: r,
+                  trailing: appState.responseOf(me, r) == null ? 'See what happened' : 'Your forecast · see what happened',
+                ),
+              if (archive.length > 5 && !searching)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: () => setState(() => _allArchive = !_allArchive),
+                    child: Text(_allArchive ? 'Show fewer' : 'Show all ${archive.length}'),
+                  ),
+                ),
             ],
           ],
         );
@@ -100,7 +273,7 @@ class InboxTab extends StatelessWidget {
   }
 }
 
-/// In-app version of the push notification.
+/// In-app version of the push notification: names the risk that changed.
 class _Notification extends StatelessWidget {
   final Risk risk;
   const _Notification({required this.risk});
@@ -110,9 +283,9 @@ class _Notification extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final n = risk.surveyItems.length;
-    final country = AppState.riskCountries(risk).first;
     return Reveal(
       child: Card(
+        margin: EdgeInsets.zero,
         color: cs.primary.withAlpha(22),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: cs.primary.withAlpha(120))),
         child: Padding(
@@ -124,16 +297,19 @@ class _Notification extends StatelessWidget {
                 children: [
                   Icon(Icons.notifications_active_outlined, color: cs.primary),
                   const SizedBox(width: 8),
-                  Text('ACAPS · now', style: t.labelMedium),
+                  Expanded(child: Text('ACAPS updated a risk · now', style: t.labelMedium)),
+                  Text('${risk.id} · ${risk.country}', style: t.labelSmall),
                 ],
               ),
               const SizedBox(height: 10),
-              Text('ACAPS updated a risk in $country. Got 2 minutes? $n short ${n == 1 ? 'question' : 'questions'}.',
-                  style: t.titleMedium),
+              Text(risk.title, maxLines: 4, overflow: TextOverflow.ellipsis, style: t.titleMedium),
+              const SizedBox(height: 6),
+              Text('Got 2 minutes? ${n + 1} short screens: ${n == 1 ? 'the risk' : '$n triggers'}, then one forecast.',
+                  style: t.bodyMedium),
               const SizedBox(height: 12),
               Row(
                 children: [
-                  TextButton(onPressed: () => appState.skip(risk), child: const Text('Not now')),
+                  TextButton(onPressed: () => notNow(context, risk), child: const Text('Not now')),
                   const Spacer(),
                   FilledButton(
                     style: FilledButton.styleFrom(minimumSize: const Size(120, 44)),
@@ -154,6 +330,9 @@ class _Notification extends StatelessWidget {
 // My forecasts
 // ---------------------------------------------------------------------------
 
+/// Everything about my own contributions in one place: my track record as a
+/// forecaster, and what ACAPS did with my comments. Quality signals only (no
+/// time-in-app or streaks): the brief asks for quality, not engagement metrics.
 class ForecastsTab extends StatelessWidget {
   const ForecastsTab({super.key});
 
@@ -165,36 +344,45 @@ class ForecastsTab extends StatelessWidget {
       builder: (context, _) {
         final me = appState.me;
         if (me == null) return const SizedBox();
-        final all = appState.responsesOf(me);
-        final open = all.where((x) => !(appState.byId(x.riskId)?.isResolved ?? false)).toList();
-        final matured = all.where((x) => appState.byId(x.riskId)?.isResolved ?? false).toList();
-        final st = appState.statsOf(me);
+        final responses = {for (final x in appState.responsesOf(me)) x.riskId: x};
+        final myComments = appState.commentsBy(me);
+        // Risks I forecast, plus any I only commented on.
+        final entries = [
+          for (final id in {...responses.keys, ...myComments.map((c) => c.riskId)})
+            if (appState.byId(id) case final r?)
+              (risk: r, response: responses[id], comments: myComments.where((c) => c.riskId == id).toList()),
+        ];
+        DateTime when(Response? x) => x == null ? DateTime(2000) : (x.editedAt ?? x.answeredAt);
+        final open = entries.where((e) => !e.risk.isResolved).toList()
+          ..sort((a, b) => (a.response?.resolvesBy ?? DateTime(3000)).compareTo(b.response?.resolvesBy ?? DateTime(3000)));
+        final matured = entries.where((e) => e.risk.isResolved).toList()..sort((a, b) => when(b.response).compareTo(when(a.response)));
 
         return ListView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
           children: [
-            Text('My forecasts', style: t.headlineSmall),
-            const SizedBox(height: 14),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Row(
-                  children: [
-                    _Stat(value: '${all.length}', label: 'answered'),
-                    _Stat(value: '${matured.length}', label: 'matured'),
-                    _Stat(value: st.brier == null ? '-' : '${accuracyPct(st.brier!)}%', label: 'accuracy'),
-                    _Stat(value: '${st.points}', label: 'points'),
-                  ],
+            Row(
+              children: [
+                Expanded(child: Text('My forecasts', style: t.headlineSmall)),
+                IconButton(
+                  tooltip: 'How scoring works',
+                  icon: const Icon(Icons.info_outline),
+                  onPressed: () => showScoringHelp(context),
                 ),
-              ),
+              ],
             ),
-            SectionLabel('Open · ${open.length}'),
-            if (open.isEmpty) Text('Nothing open. Answer a risk from the Risks tab.', style: t.bodySmall),
-            for (final x in open) _ForecastCard(response: x),
+            const SizedBox(height: 8),
+            _TrackRecord(me: me, responses: responses.values.toList(), comments: myComments),
+            SectionLabel('Waiting for the outcome · ${open.length}'),
+            if (open.isEmpty)
+              Text('Nothing open. Answer a risk from the Risks tab.', style: t.bodySmall)
+            else
+              Text('You can still change these: see how the group answered, then refine your view.', style: t.bodySmall),
+            for (final e in open) _MyRiskCard(risk: e.risk, response: e.response, comments: e.comments),
             SectionLabel('Matured · ${matured.length}'),
             if (matured.isEmpty)
-              Text('A forecast matures when the 6-month window closes. Try an archive risk to see one now.', style: t.bodySmall),
-            for (final x in matured) _ForecastCard(response: x),
+              Text('A forecast matures when ACAPS records whether the risk materialised. Then it is scored here.',
+                  style: t.bodySmall),
+            for (final e in matured) _MyRiskCard(risk: e.risk, response: e.response, comments: e.comments),
           ],
         );
       },
@@ -202,69 +390,263 @@ class ForecastsTab extends StatelessWidget {
   }
 }
 
-class _ForecastCard extends StatelessWidget {
-  final Response response;
-  const _ForecastCard({required this.response});
+/// How good my forecasts are, and how useful my comments were.
+class _TrackRecord extends StatelessWidget {
+  final Expert me;
+  final List<Response> responses;
+  final List<Comment> comments;
+  const _TrackRecord({required this.me, required this.responses, required this.comments});
 
   @override
   Widget build(BuildContext context) {
-    final r = appState.byId(response.riskId)!;
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    final when = response.editedAt ?? response.answeredAt;
+    final st = appState.statsOf(me);
+    final scores = [for (final x in responses) appState.scoreOf(x)].whereType<ForecastScore>().toList();
+    // ACAPS scored on exactly the risks I forecast: a fair bar to beat.
+    final acaps = scores.isEmpty ? null : scores.fold(0.0, (s, x) => s + x.acaps) / scores.length;
+    final rank = appState.accuracyRank(me);
+    final superEstimator = appState.badgesOf(me).contains(Award.superEstimator);
+    final useful = comments.where((c) => c.useful).length;
+    final used = comments.where((c) => c.usedInRiskId != null).length;
+
+    final String status;
+    if (!me.onRating) {
+      status = 'You are not in the rating. Turn it on in Profile to be ranked.';
+    } else if (st.resolved < minResolvedForBrier) {
+      final left = minResolvedForBrier - st.resolved;
+      status = '$left more matured ${left == 1 ? 'forecast' : 'forecasts'} until you are ranked for Super estimator.';
+    } else if (superEstimator) {
+      status = 'Super estimator: #${rank!.rank} of ${rank.of} by accuracy.';
+    } else {
+      status = rank == null ? 'Ranked by accuracy once your forecasts mature.' : '#${rank.rank} of ${rank.of} by accuracy. The top 3 are Super estimators.';
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Forecasting', style: t.labelLarge),
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _Stat(value: '${responses.length}', label: 'forecasts'),
+                _Stat(value: '${st.resolved}', label: 'matured'),
+                _Stat(
+                  value: st.brier == null ? '-' : '${accuracyPct(st.brier!)}%',
+                  label: 'accuracy',
+                  note: st.brier == null || acaps == null ? null : _VsAcaps(mine: st.brier!, acaps: acaps, risks: scores.length),
+                ),
+                _Stat(value: '${st.points}', label: 'total points'),
+              ],
+            ),
+            const Divider(height: 24),
+            Text('Your comments', style: t.labelLarge),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                _Stat(value: '$useful', label: 'marked useful'),
+                _Stat(value: '$used', label: 'used in analysis'),
+              ],
+            ),
+            const Divider(height: 24),
+            Row(
+              children: [
+                if (superEstimator) ...[const AwardIcon(Award.superEstimator, size: 26), const SizedBox(width: 10)] else ...[
+                  Icon(Icons.track_changes, size: 22, color: cs.primary),
+                  const SizedBox(width: 10),
+                ],
+                Expanded(child: Text(status, style: t.bodyMedium)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One risk I contributed to: my forecast (and its score once matured),
+/// my trigger answers, and what ACAPS did with my comments.
+class _MyRiskCard extends StatelessWidget {
+  final Risk risk;
+  final Response? response;
+  final List<Comment> comments;
+  const _MyRiskCard({required this.risk, required this.response, required this.comments});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final r = risk;
+    final resp = response;
     final items = r.surveyItems;
+    final myComments = [for (final c in comments) _MyComment(comment: c, items: items)];
+
+    // Matured: the outcome and my score, read-only.
+    if (r.isResolved) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SurveyScreen(risk: r, start: SurveyStart.summary))),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [MaturedBlock(risk: r, response: resp), ...myComments],
+          ),
+        ),
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
-      child: r.isResolved
-          ? MaturedBlock(risk: r, response: response)
-          : Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text('${r.id} · ${r.country}',
-                              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: cs.onSurfaceVariant)),
-                        ),
-                        Text('${response.editedAt == null ? 'Answered' : 'Edited'} ${formatDate(when)}', style: t.bodySmall),
-                      ],
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text('${r.id} · ${r.country}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: cs.onSurfaceVariant)),
+                  ),
+                  if (resp != null)
+                    Pill('Matures ${formatDate(resp.resolvesBy)}', icon: Icons.hourglass_top),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(r.oneLiner, style: t.titleSmall),
+              if (resp != null) ...[
+                const SizedBox(height: 4),
+                Text('${resp.editedAt == null ? 'Answered' : 'Changed'} ${formatDate(resp.editedAt ?? resp.answeredAt)}', style: t.bodySmall),
+                const SizedBox(height: 8),
+                if (resp.forecast != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      'Your forecast: ${probabilityText(resp.forecast!)}'
+                      '${r.acapsLikelihood == null ? '' : ' · ACAPS: ${probabilityText(r.acapsLikelihood!)}'}',
+                      style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
                     ),
-                    const SizedBox(height: 6),
-                    Text(r.oneLiner, style: t.titleSmall),
-                    const SizedBox(height: 8),
-                    for (final it in items)
-                      if (response.items[it.id] case final a?)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
+                  ),
+                // Every earlier check-in is kept: my own view over time.
+                if (resp.history.length > 1)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.timeline, size: 16, color: cs.onSurfaceVariant),
+                        const SizedBox(width: 6),
+                        Expanded(
                           child: Text(
-                            '${items.length > 1 ? '${it.title}: ' : ''}agree ${a.agree.label.toLowerCase()} · likely ${a.likelihood}/5 · bad ${a.severity}/5',
+                            'Your check-ins: ${resp.history.map((c) => '${levelLabels[c.forecast - 1]} (${formatDate(c.at)})').join(' → ')}',
                             style: t.bodySmall,
                           ),
                         ),
-                    Text('Matures ${formatDate(response.answeredAt.add(const Duration(days: 182)))}', style: t.bodySmall),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        TextButton.icon(
-                          onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SurveyScreen(risk: r, start: SurveyStart.summary))),
-                          icon: const Icon(Icons.bar_chart, size: 18),
-                          label: const Text('Group view'),
-                        ),
-                        TextButton.icon(
-                          onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SurveyScreen(risk: r, start: SurveyStart.questions))),
-                          icon: const Icon(Icons.edit_outlined, size: 18),
-                          label: const Text('Edit'),
-                        ),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                // My ground-truthing answers, in the survey's own words.
+                for (final it in items)
+                  if (resp.items[it.id] case final a?)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Text.rich(
+                        TextSpan(children: [
+                          if (items.length > 1)
+                            TextSpan(text: '${it.title}\n', style: const TextStyle(fontWeight: FontWeight.w700)),
+                          TextSpan(
+                            text: 'Agree with ACAPS: ${a.agree.label} · '
+                                'How bad it would be: ${a.severity} of 5 (${severityLabels[a.severity - 1]})',
+                          ),
+                        ]),
+                        style: t.bodySmall,
+                      ),
+                    ),
+              ],
+              ...myComments,
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 4,
+                children: [
+                  TextButton.icon(
+                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SurveyScreen(risk: r, start: SurveyStart.summary))),
+                    icon: const Icon(Icons.bar_chart, size: 18),
+                    label: const Text('Group view'),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => SurveyScreen(risk: r, start: resp == null ? SurveyStart.intro : SurveyStart.questions),
+                    )),
+                    icon: Icon(resp == null ? Icons.play_arrow : Icons.edit_outlined, size: 18),
+                    label: Text(resp == null ? 'Answer' : 'Change answer'),
+                  ),
+                ],
               ),
-            ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One of my comments and what ACAPS did with it. Never names the moderator.
+class _MyComment extends StatelessWidget {
+  final Comment comment;
+  final List<SurveyItem> items;
+  const _MyComment({required this.comment, required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final c = comment;
+    final item = items.where((i) => i.id == c.itemId).firstOrNull;
+    final feedback = [
+      if (c.useful) ('Marked useful by ACAPS · +${Points.usefulComment}', Icons.lightbulb_outline),
+      if (c.usedInRiskId != null) ('Used in the analysis of ${c.usedInRiskId} · +${Points.usedComment}', Icons.push_pin_outlined),
+    ];
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(150), borderRadius: BorderRadius.circular(12)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.chat_bubble_outline, size: 15, color: cs.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(item != null && items.length > 1 ? 'Your comment on: ${item.title}' : 'Your comment',
+                    style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(c.text, style: const TextStyle(height: 1.4)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              for (final (text, icon) in feedback) Pill(text, icon: icon, strong: true),
+              Pill('Colleagues: ${c.agreeIds.length} agree · ${c.disagreeIds.length} disagree', icon: Icons.thumbs_up_down_outlined),
+              if (feedback.isEmpty) Text('No feedback from ACAPS yet', style: t.bodySmall),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -272,7 +654,10 @@ class _ForecastCard extends StatelessWidget {
 class _Stat extends StatelessWidget {
   final String value;
   final String label;
-  const _Stat({required this.value, required this.label});
+
+  /// Extra line under the label (e.g. the comparison with ACAPS).
+  final Widget? note;
+  const _Stat({required this.value, required this.label, this.note});
 
   @override
   Widget build(BuildContext context) {
@@ -281,9 +666,36 @@ class _Stat extends StatelessWidget {
         children: [
           Text(value, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 2),
-          Text(label, style: Theme.of(context).textTheme.bodySmall),
+          Text(label, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
+          if (note != null) ...[const SizedBox(height: 3), note!],
         ],
       ),
+    );
+  }
+}
+
+/// "+7% vs ACAPS": my accuracy minus ACAPS's on exactly the risks I
+/// forecast, scored the same way.
+class _VsAcaps extends StatelessWidget {
+  final double mine;
+  final double acaps;
+  final int risks;
+  const _VsAcaps({required this.mine, required this.acaps, required this.risks});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final diff = accuracyPct(mine) - accuracyPct(acaps);
+    final (text, color) = diff > 0
+        ? ('+$diff% vs ACAPS', agreementColors[Agreement.yes]!) // green: better than ACAPS
+        : diff < 0
+            ? ('$diff% vs ACAPS', agreementColors[Agreement.no]!) // red: below ACAPS
+            : ('same as ACAPS', cs.onSurfaceVariant);
+    return Tooltip(
+      message: 'ACAPS\'s own ratings on the same $risks ${risks == 1 ? 'risk' : 'risks'}, scored the same way, '
+          'reached ${accuracyPct(acaps)}%.',
+      triggerMode: TooltipTriggerMode.tap,
+      child: Text(text, textAlign: TextAlign.center, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: color)),
     );
   }
 }
@@ -353,6 +765,8 @@ class _RatingTabState extends State<RatingTab> {
               ],
             ),
             const SizedBox(height: 8),
+            // Chips in a row that scrolls sideways: three segments do not fit
+            // a narrow phone at large text sizes.
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
@@ -414,11 +828,21 @@ class _RatingTabState extends State<RatingTab> {
                   isMe: people[i].expert!.id == me?.id,
                 ),
             const SizedBox(height: 8),
-            _Benchmark(row: acaps, scopeName: _scopeName),
+            _Benchmark(
+              row: acaps,
+              scopeName: _scopeName,
+              earlier: appState.risks
+                  .where((r) => r.isResolved && r.acapsLikelihood != null && r.fromEarlierList && _riskMatches(r))
+                  .length,
+            ),
             const SectionLabel('How you earn points'),
             _PointsRow(icon: Icons.track_changes, text: 'Matured forecast: up to 100 points, equal to your accuracy'),
             _PointsRow(icon: Icons.lightbulb_outline, text: '+${Points.usefulComment}: a moderator marks your comment as useful'),
             _PointsRow(icon: Icons.push_pin_outlined, text: '+${Points.usedComment}: your comment is used in the analysis of another risk'),
+            _PointsRow(
+              icon: Icons.group_add_outlined,
+              text: '+${Points.referral}: a colleague signs up with your referral code (Profile).',
+            ),
             const SectionLabel('Badges'),
             for (final b in Award.values)
               ListTile(
@@ -438,7 +862,10 @@ class _RatingTabState extends State<RatingTab> {
 class _Benchmark extends StatelessWidget {
   final RatingRow row;
   final String scopeName;
-  const _Benchmark({required this.row, required this.scopeName});
+
+  /// How many of those risks come from ACAPS's earlier list (longer time frames).
+  final int earlier;
+  const _Benchmark({required this.row, required this.scopeName, this.earlier = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -468,8 +895,10 @@ class _Benchmark extends StatelessWidget {
             row.brier == null
                 ? 'No resolved ACAPS risks in $scopeName yet, so there is nothing to compare with here.'
                 : 'For each of the ${row.resolved} resolved risks in $scopeName, ACAPS published a probability '
-                    '(e.g. "High" ≈ 70%). We score those ratings exactly like yours. '
-                    'If your accuracy is higher, your forecasts beat the published analysis.',
+                    '(e.g. "High" = 67–90%). We score those ratings exactly like yours. '
+                    'If your accuracy is higher, your forecasts beat the published analysis.'
+                    '${earlier == 0 ? '' : ' $earlier of these risks come from ACAPS\'s earlier risk list and resolved '
+                        'over longer than 6 months, so treat this benchmark as indicative.'}',
             style: t.bodySmall,
           ),
           Align(
@@ -493,17 +922,24 @@ void showScoringHelp(BuildContext context) => showDialog<void>(
         title: const Text('How accuracy is scored'),
         content: const SingleChildScrollView(
           child: Text(
-            'When a forecast matures, we check what actually happened.\n\n'
-            'Accuracy: how close your "how likely" answers were to reality. '
-            '100% means you were sure and right; 0% means you were sure and wrong.\n\n'
-            'Example: you said "Very likely" (90%) and it happened: accuracy 99%. '
-            'You said "Even chance" (50%): accuracy 75%, whatever happened.\n\n'
+            'For each risk you give one forecast: will it materialise within 6 months? '
+            'You answer on ACAPS\'s own probability scale:\n'
+            'Very low <10% · Low 10–33% · Medium 34–66% · High 67–90% · Very high >90%.\n\n'
+            'When ACAPS records what happened, your forecast matures. We score it with the '
+            'middle of your range (5%, 20%, 50%, 80% or 95%).\n\n'
+            'Accuracy: 100% means you were sure and right; 0% means you were sure and wrong.\n'
+            'Example: you said "High" (80%) and it happened: accuracy 96%. It did not: 36%. '
+            'You said "Medium" (50%): accuracy 75%, whatever happened.\n\n'
             'Behind it is the Brier score, a standard measure for forecasts: the squared gap '
             'between your probability and the outcome (0 = perfect, 1 = worst). '
             'Accuracy = 100 × (1 − Brier).\n\n'
-            'Only likelihood is scored. "How bad" is not scored yet.\n\n'
-            'Bar to beat: ACAPS publishes a probability for every risk. We score those '
-            'published ratings against what happened, the same way, as a benchmark.',
+            'Only the forecast is scored. Your answers per trigger (agree, how bad, '
+            'what is missing) help ACAPS but are not scored.\n\n'
+            'Bar to beat: ACAPS rates every risk on the same scale. We score those '
+            'ratings against what happened, the same way, as a benchmark.\n\n'
+            'Older risks (from ACAPS\'s earlier risk list) often took longer than 6 months to '
+            'resolve. They are marked, and their scores are indicative. Every new forecast '
+            'you make has a true 6-month window.',
           ),
         ),
         actions: [FilledButton(onPressed: () => Navigator.pop(c), child: const Text('Got it'))],
@@ -619,6 +1055,7 @@ class AwardIcon extends StatelessWidget {
       Award.usefulInsight => (Icons.lightbulb_outline, const Color(0xFF6E9E72)),
       Award.cited => (Icons.push_pin_outlined, const Color(0xFF2E7DAF)),
       Award.regular => (Icons.repeat, const Color(0xFF8A6FB0)),
+      Award.referralMaster => (Icons.group_add_outlined, const Color(0xFF2A9D8F)),
     };
     return Tooltip(
       message: badge.label,

@@ -3,6 +3,17 @@
   "version": "2.0.0",
   "tasks": [
     {
+      // app-mobile: writes app-mobile/.dart_tool/supabase_keys.json with only
+      // SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY from API.key (see
+      // app-mobile/tool/supabase_keys.dart). Without API.key it writes {}.
+      "label": "Supabase keys (app-mobile)",
+      "type": "shell",
+      "command": "dart run tool/supabase_keys.dart",
+      "options": { "cwd": "${workspaceFolder}/app-mobile" },
+      "presentation": { "reveal": "silent" },
+      "problemMatcher": []
+    },
+    {
       // CORS proxy for the ACAPS API, needed by "Import" in the web build.
       // Starts once and keeps running; if port 8787 is already taken
       // (proxy started by hand), the task fails but the running proxy still works.

@@ -11,8 +11,15 @@
 // Run it by hand or let the weekly GitHub Action do it
 // (.github/workflows/weekly-risk-sync.yml):
 //
-//   dart run scripts/sync_risks.dart            # sync
-//   dart run scripts/sync_risks.dart --dry-run  # fetch and compare only, write nothing
+//   dart run scripts/sync_risks.dart                # sync
+//   dart run scripts/sync_risks.dart --dry-run      # fetch and compare only, write nothing
+//   dart run scripts/sync_risks.dart --keep-removed # do not delete risks the API no longer lists
+//
+// Only what changed is written: if Supabase already matches the API, the run
+// writes nothing. Risks the API no longer lists are deleted (with their
+// countries and triggers), so Supabase holds exactly the Risk Radar. As a
+// safety net, nothing is deleted when the API returns less than half of the
+// risks Supabase has (e.g. a partial outage).
 //
 // Plain Dart, no packages: runs anywhere the Dart SDK is (Flutter ships it).
 //
@@ -22,8 +29,9 @@
 //                                       security: scripts and servers only
 //   ACAPS_EMAIL, ACAPS_PASSWORD         the ACAPS API account
 //
-// Safe to re-run: rows are upserted by primary key. Risks the API does not
-// list (e.g. ones only in the CSV export) are left as they are.
+// Safe to re-run: rows are upserted by primary key, and an up-to-date
+// database is left untouched (each row's `imported_at` is the last time it
+// changed). The ground_truth apps read these tables; they never write them.
 // =============================================================================
 
 import 'dart:convert';
@@ -48,6 +56,7 @@ const _exposures = {'<20,000', '20,000-100,000', '100,000-250,000', '250,000-500
 
 Future<void> main(List<String> args) async {
   final dryRun = args.contains('--dry-run');
+  final keepRemoved = args.contains('--keep-removed');
   final env = _credentials();
   String need(String k) => env[k] ?? (throw StateError('Set $k (environment variable or API.key).'));
 
@@ -73,39 +82,78 @@ Future<void> main(List<String> args) async {
     triggers.addAll(_triggerRows(id, _text(m['triggers_summary'])));
   }
 
-  // --- 3. Compare with what Supabase has now (for the log) -------------------
+  // --- 3. Compare with what Supabase has now ---------------------------------
+  // Every column we write except imported_at, so an unchanged risk compares equal.
+  final columns = risks.isEmpty ? <String>[] : [for (final k in risks.first.keys) if (k != 'imported_at') k];
   final db = _Supabase(need('SUPABASE_URL'), need('SUPABASE_SECRET_KEY'));
-  final before = {for (final r in await db.select('risks', 'risk_id,status')) r['risk_id'] as String: r['status'] as String?};
-  final added = [for (final r in risks) if (!before.containsKey(r['risk_id'])) r['risk_id']];
-  final changed = [
+  final before = {for (final r in await db.select('risks', columns.join(','))) r['risk_id'] as String: r};
+  final apiIds = {for (final r in risks) r['risk_id'] as String};
+
+  final added = [for (final r in risks) if (!before.containsKey(r['risk_id'])) r['risk_id'] as String];
+  final updated = [
     for (final r in risks)
-      if (before.containsKey(r['risk_id']) && before[r['risk_id']] != r['status'])
-        '${r['risk_id']}: ${before[r['risk_id']] ?? 'no status'} -> ${r['status'] ?? 'no status'}',
+      if (before[r['risk_id']] case final old? when _fingerprint(old, columns) != _fingerprint(r, columns)) r['risk_id'] as String,
   ];
+  final statusChanges = [
+    for (final id in updated)
+      if (before[id]!['status'] != risks.firstWhere((r) => r['risk_id'] == id)['status'])
+        '$id: ${before[id]!['status'] ?? 'no status'} -> ${risks.firstWhere((r) => r['risk_id'] == id)['status'] ?? 'no status'}',
+  ];
+  final removed = [for (final id in before.keys) if (!apiIds.contains(id)) id]..sort();
+
+  // Safety net: a half-empty answer from the API must not wipe the table.
+  final pruneAllowed = !keepRemoved && records.length * 2 >= before.length;
+
   stdout.writeln('Supabase before: ${before.length} risks');
   stdout.writeln('New risks: ${added.isEmpty ? 'none' : added.join(', ')}');
-  stdout.writeln('Status changes: ${changed.isEmpty ? 'none' : '\n  ${changed.join('\n  ')}'}');
+  stdout.writeln('Changed risks: ${updated.isEmpty ? 'none' : updated.join(', ')}');
+  stdout.writeln('Status changes: ${statusChanges.isEmpty ? 'none' : '\n  ${statusChanges.join('\n  ')}'}');
+  stdout.writeln('No longer in the API: ${removed.isEmpty ? 'none' : removed.join(', ')}'
+      '${removed.isEmpty ? '' : keepRemoved ? ' (kept: --keep-removed)' : pruneAllowed ? ' (will be deleted)' : ' (kept: the API returned too few risks to trust)'}');
 
+  final toWrite = [for (final r in risks) if (added.contains(r['risk_id']) || updated.contains(r['risk_id'])) r];
+  final toDelete = pruneAllowed ? removed : const <String>[];
+  if (toWrite.isEmpty && toDelete.isEmpty) {
+    stdout.writeln('Supabase is already up to date with the ACAPS API: nothing written.');
+    acaps.close();
+    db.close();
+    return;
+  }
   if (dryRun) {
-    stdout.writeln('Dry run: nothing written.');
+    stdout.writeln('Dry run: nothing written (would write ${toWrite.length} and delete ${toDelete.length} risks).');
+    acaps.close();
+    db.close();
     return;
   }
 
-  // --- 4. Write ---------------------------------------------------------------
-  await db.upsert('risks', risks, 'risk_id');
-  // Child rows: replace them for the risks we loaded, so removed triggers disappear.
-  final ids = [for (final r in risks) '"${r['risk_id']}"'].join(',');
-  await db.delete('risk_countries', 'risk_id=in.($ids)');
-  await db.upsert('risk_countries', countries, 'risk_id,iso');
-  await db.delete('risk_triggers', 'risk_id=in.($ids)');
-  await db.upsert('risk_triggers', triggers, 'trigger_id');
+  // --- 4. Write (only what changed) -------------------------------------------
+  if (toWrite.isNotEmpty) {
+    final writeIds = {for (final r in toWrite) r['risk_id']};
+    await db.upsert('risks', toWrite, 'risk_id');
+    // Child rows: replace them for the risks we wrote, so removed triggers disappear.
+    final ids = [for (final id in writeIds) '"$id"'].join(',');
+    await db.delete('risk_countries', 'risk_id=in.($ids)');
+    await db.upsert('risk_countries', [for (final c in countries) if (writeIds.contains(c['risk_id'])) c], 'risk_id,iso');
+    await db.delete('risk_triggers', 'risk_id=in.($ids)');
+    await db.upsert('risk_triggers', [for (final t in triggers) if (writeIds.contains(t['risk_id'])) t], 'trigger_id');
+  }
+  if (toDelete.isNotEmpty) {
+    // Countries, triggers and any server-side answers on them go too (on delete cascade).
+    await db.delete('risks', 'risk_id=in.(${[for (final id in toDelete) '"$id"'].join(',')})');
+  }
 
+  stdout.writeln('Written: ${toWrite.length} risks. Deleted: ${toDelete.length} risks.');
   for (final t in ['risks', 'risk_countries', 'risk_triggers']) {
     stdout.writeln('$t: ${await db.count(t)} rows in Supabase');
   }
   acaps.close();
   db.close();
 }
+
+/// A comparable text for one risk row: the given columns in a fixed order.
+/// Postgres returns text[] as a list and smallint as a number, the same types
+/// [_riskRow] builds, so equal rows give equal fingerprints.
+String _fingerprint(Map<String, Object?> row, List<String> columns) => jsonEncode([for (final c in columns) row[c]]);
 
 // =============================================================================
 // Mapping: one API record -> one `risks` row

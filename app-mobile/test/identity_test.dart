@@ -3,10 +3,14 @@ import 'package:ground_truth/models.dart';
 import 'package:ground_truth/store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'fixture_risks.dart';
+
 Expert _e(String id, Anonymity level, {String? name = 'Real Name', String country = 'Chad'}) =>
     Expert(id: id, realName: name, pseudonym: 'Pseudo-$id', level: level, homeCountry: country);
 
 void main() {
+  setUpAll(useFixtureRisks);
+
   group('displayName', () {
     final l1 = _e('a', Anonymity.knownToAcaps);
     final l2 = _e('b', Anonymity.pseudonymous);
@@ -67,27 +71,29 @@ void main() {
 
     setUp(() => SharedPreferences.setMockInitialValues({}));
 
-    test('R1043 survey: 3 trigger screens, 5 of 8 before you, 6 of 8 after', () async {
+    test('demo risk survey: 3 trigger screens, 7 of 10 before you, 8 of 10 after', () async {
       final s = AppState();
       await s.load();
       expect(s.error, isNull);
-      final r = s.byId('R1043')!;
+      final r = s.byId(demoRiskId)!;
       expect(r.surveyItems.length, 3);
-      expect(s.panelForRisk(r).length, 8);
-      expect(s.respondents(r).length, 5);
+      expect(s.panelForRisk(r).length, 10);
+      expect(s.respondents(r).length, 7);
 
-      expect(s.redeemInvite('nope'), isNull);
-      expect(s.redeemInvite('gt-chad-7q4x'), 'Chad');
+      expect(s.redeemInvite('nope'), InviteStatus.unknown);
+      expect(s.redeemInvite(s.demoInvite!.code), InviteStatus.ok);
+      expect(s.invitePanel, 'Chad');
       s.signInAs(s.expertById('p1')!);
-      expect(s.pendingNotification?.id, 'R1043');
+      expect(s.pendingNotification?.id, demoRiskId);
 
       s.submit(r, {
         for (final it in r.surveyItems)
-          it.id: ItemAnswer(agree: Agreement.partly, likelihood: 4, severity: 4, missing: it == r.surveyItems.first ? 'Watch Tiné' : ''),
-      });
-      expect(s.respondents(r).length, 6);
+          it.id: ItemAnswer(agree: Agreement.partly, severity: 4, missing: it.id == r.surveyItems.first.id ? 'Watch Tiné' : ''),
+      }, forecast: 4);
+      expect(s.responseOf(s.me!, r)?.forecast, 4);
+      expect(s.respondents(r).length, 8);
       expect(s.commentsOn(r).where((c) => c.authorId == 'p1').length, 1);
-      expect(s.pendingNotification?.id, isNot('R1043'));
+      expect(s.pendingNotification?.id, isNot(demoRiskId));
     });
 
     test('persona history has matured, scored forecasts', () async {
@@ -98,7 +104,8 @@ void main() {
       expect(matured, isNotEmpty);
       expect(s.scoreOf(matured.first), isNotNull);
       expect(s.rawExpertTable, contains('"real_name": null'));
-      expect(s.thinPanels.any((p) => p.country == 'Cameroon' && p.n == 2), isTrue);
+      // Only countries with active risks count: Kenya (R1044) has 2 experts.
+      expect(s.thinPanels.any((p) => p.country == 'Kenya' && p.n == 2), isTrue);
     });
   });
 }
