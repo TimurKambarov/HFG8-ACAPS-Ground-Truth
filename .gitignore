@@ -45,3 +45,6 @@ yarn.lock
 .env.local
 *.key
 *.pem
+
+# Supabase backend (migrations, scripts): kept out of the repo
+/supabase/
