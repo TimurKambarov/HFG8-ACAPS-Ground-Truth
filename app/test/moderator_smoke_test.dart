@@ -190,14 +190,19 @@ void main() {
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const GroundTruthApp());
     await tester.pumpAndSettle();
-    if (find.text('Not now').evaluate().isNotEmpty) {
-      await tester.tap(find.text('Not now').first);
+    final popupNotNow = find.descendant(of: find.byType(AlertDialog), matching: find.text('Not now'));
+    if (popupNotNow.evaluate().isNotEmpty) {
+      await tester.tap(popupNotNow);
       await tester.pumpAndSettle();
     }
-    await tester.tap(find.text('Profile').last);
+    // My forecasts tab: track record plus comment feedback, in one place.
+    await tester.tap(find.text('My forecasts').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.history)); // Profile -> My forecasts
-    await tester.pumpAndSettle();
+    expect(find.textContaining('vs ACAPS'), findsOneWidget); // accuracy compared with ACAPS, same risks
+    expect(find.text('total points'), findsOneWidget);
+    expect(find.text('marked useful'), findsOneWidget);
+    expect(find.text('used in analysis'), findsOneWidget);
+    expect(find.text('comments'), findsNothing); // no plain comment count
     // Scroll through the whole list, checking each screenful for moderator names.
     final flag = find.textContaining('Marked useful by ACAPS');
     var seen = false;
@@ -232,7 +237,7 @@ void main() {
     expect(s.archiveForMe(), isNotEmpty);
     expect(s.archiveForMe().where((r) => s.responseOf(s.me!, r) != null), isNotEmpty);
     s.signInAs(s.experts.last);
-    s.submit(closed, {for (final it in closed.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, likelihood: 5, severity: 3)});
+    s.submit(closed, {for (final it in closed.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, severity: 3)}, forecast: 5);
     expect(s.responseOf(s.me!, closed), isNull);
     expect(s.statsOf(s.me!).points, before);
   });
@@ -291,6 +296,99 @@ void main() {
     expect(third.byId(id), isNull);
   });
 
+  testWidgets('survey: triggers first, then one scored forecast', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.runAsync(() => appState.load());
+    await appState.resetDemo();
+    appState.signInAs(appState.expertById('p1')!);
+    tester.view.physicalSize = const Size(500, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const GroundTruthApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Start')));
+    await tester.pumpAndSettle();
+
+    final r = appState.byId('R1043')!;
+    for (var i = 0; i < r.surveyItems.length; i++) {
+      expect(find.textContaining('Trigger ${i + 1} of'), findsWidgets);
+      expect(find.textContaining('How likely'), findsNothing); // no forecast on trigger screens
+      await tester.tap(find.text('Yes'));
+      await tester.tap(find.text('Serious'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+    }
+
+    // The forecast screen: ACAPS words with their ranges.
+    expect(find.text('YOUR FORECAST · SCORED'), findsOneWidget);
+    expect(find.text('High\n67–90%'), findsOneWidget);
+    await tester.tap(find.text('High\n67–90%'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('You: High (67–90%)'), findsOneWidget);
+    await tester.tap(find.text('Send answers'));
+    await tester.pumpAndSettle();
+
+    final resp = appState.responseOf(appState.me!, r)!;
+    expect(resp.forecast, 4);
+    expect(resp.items.length, r.surveyItems.length);
+    expect(find.text('FORECAST: WILL IT MATERIALISE WITHIN 6 MONTHS?'), findsOneWidget);
+  });
+
+  test('group view is the median and the middle half (Delphi-style)', () {
+    // 10 experts: Low 1, Medium 3, High 5, Very high 1.
+    final g = GroupView.of([2, 3, 3, 3, 4, 4, 4, 4, 4, 5])!;
+    expect(g.median, 4);
+    expect(g.probability, 'High (67–90%)');
+    expect([g.low, g.high], [3, 4]);
+    expect(g.spread(levelLabels), 'Most experts between Medium and High');
+
+    // One outlier cannot drag the group answer (an average would drop to 3.7).
+    expect(GroupView.of([1, 4, 4, 4, 4, 4, 4, 4, 4, 4])!.probability, 'High (67–90%)');
+
+    // Everyone the same, and a split panel.
+    expect(GroupView.of([4, 4, 4])!.spread(levelLabels), 'Experts agree: most said High');
+    expect(GroupView.of([1, 2, 4, 5, 5])!.spread(levelLabels), startsWith('Opinions split'));
+
+    // Even panel exactly between two steps: said so, not rounded.
+    expect(GroupView.of([3, 3, 4, 4])!.probability, 'between Medium and High');
+    expect(GroupView.of([3, 4, 4, 4])!.severity, '4 of 5 (Severe)');
+    expect(GroupView.of(const []), isNull);
+  });
+
+  test('one forecast per risk, scored on the ACAPS scale', () async {
+    // ACAPS ranges (methodology PDF), scored at the middle of each range.
+    expect(probabilityText(4), 'High (67–90%)');
+    expect(accuracyPct(brier(4, true)), 96); // High (80%) and it happened
+    expect(accuracyPct(brier(4, false)), 36); // High (80%) and it did not
+    expect(accuracyPct(brier(3, true)), 75); // Medium (50%): 75% either way
+    expect(accuracyPct(brier(3, false)), 75);
+    expect(accuracyPct(brier(5, true)), 100); // Very high (95%), rounded
+
+    SharedPreferences.setMockInitialValues({});
+    final s = AppState();
+    await s.load();
+    // Every simulated answer has exactly one forecast; trigger answers have none.
+    final p1 = s.expertById('p1')!;
+    final matured = s.responsesOf(p1).where((x) => s.byId(x.riskId)!.isResolved).first;
+    expect(matured.forecast, isNotNull);
+    final r = s.byId(matured.riskId)!;
+    final score = s.scoreOf(matured)!;
+    expect(score.mine, brier(matured.forecast!, r.materialised));
+    expect(score.acaps, brier(r.acapsLikelihood!, r.materialised));
+
+    // Answers saved in the old format (likelihood per trigger) become one forecast.
+    final old = Response.fromJson({
+      'expert': 'x', 'risk': 'R1043', 'at': '2026-10-01T00:00:00.000',
+      'items': {
+        'a': {'agree': 0, 'likelihood': 4, 'severity': 3},
+        'b': {'agree': 1, 'likelihood': 5, 'severity': 3},
+      },
+    });
+    expect(old.forecast, 5); // average 4.5, rounded
+    expect(old.items['a']!.severity, 3);
+  });
+
   test('public view JSON has aggregates only', () async {
     SharedPreferences.setMockInitialValues({});
     final s = AppState();
@@ -298,8 +396,16 @@ void main() {
     final m = jsonDecode(s.publicViewJson([s.byId('R1043')!])) as Map<String, dynamic>;
     final r = (m['risks'] as List).single as Map<String, dynamic>;
     expect(r['published'], isTrue);
+    // One forecast per risk on the ACAPS scale; triggers carry ground truthing only.
+    expect((r['forecast']['distribution_1_5'] as List).length, 5);
+    expect(r['forecast']['median_label'], isA<String>()); // e.g. "High (67–90%)"
+    expect((r['forecast']['middle_half_1_5'] as List).length, 2);
+    expect(r['forecast'].containsKey('mean_1_5'), isFalse);
+    expect(r['acaps']['probability_range'], '67–90%'); // R1043 is rated High
+    expect(m['probability_scale']['4'], {'label': 'High', 'range': '67–90%'});
     final q = (r['questions'] as List).first as Map<String, dynamic>;
-    expect((q['likelihood']['distribution_1_5'] as List).length, 5);
+    expect(q.containsKey('likelihood'), isFalse);
+    expect((q['severity']['distribution_1_5'] as List).length, 5);
     final text = jsonEncode(m);
     for (final e in s.experts) {
       expect(text.contains(e.pseudonym), isFalse);
@@ -318,10 +424,10 @@ void main() {
 
     // An expert's choice for this risk overrides the profile default.
     s.signInAs(s.expertById('p1')!);
-    s.submit(r1043, {for (final it in r1043.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, likelihood: 3, severity: 3)},
+    s.submit(r1043, {for (final it in r1043.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, severity: 3)}, forecast: 3,
         credit: Credit.anonymous);
     expect(s.creditsFor(r1043).map((c) => c.name), isNot(contains('Amina Haroun')));
-    s.submit(r1043, {for (final it in r1043.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, likelihood: 3, severity: 3)},
+    s.submit(r1043, {for (final it in r1043.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, severity: 3)}, forecast: 3,
         credit: Credit.pseudonym);
     expect(s.creditsFor(r1043).map((c) => c.name), contains('Harmattan-17'));
     expect(s.redeemInvite(inviteCodeFor('Kenya')), 'Kenya');

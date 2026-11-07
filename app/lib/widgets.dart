@@ -76,7 +76,8 @@ class Pill extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[Icon(icon, size: 13, color: fg), const SizedBox(width: 4)],
-          Text(text, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: fg)),
+          // Wraps instead of overflowing when the pill is wider than its space.
+          Flexible(child: Text(text, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: fg))),
         ],
       ),
     );
@@ -266,11 +267,18 @@ class RiskTile extends StatelessWidget {
                         Row(
                           children: [
                             LevelBadge(risk.level),
-                            const Spacer(),
-                            done && !risk.isResolved
-                                ? Icon(Icons.check_circle, color: cs.primary, size: 22)
-                                : Text(trailing ?? '$n ${n == 1 ? 'question' : 'questions'} · 2 min',
-                                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                            const SizedBox(width: 10),
+                            // Shrinks and wraps on narrow phones instead of overflowing.
+                            Expanded(
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: done && !risk.isResolved
+                                    ? Icon(Icons.check_circle, color: cs.primary, size: 22)
+                                    : Text(trailing ?? '${n + 1} short screens · 2 min',
+                                        textAlign: TextAlign.end,
+                                        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                              ),
+                            ),
                           ],
                         ),
                       ],
@@ -323,7 +331,7 @@ class RiskHeader extends StatelessWidget {
           Text(risk.oneLiner, style: t.titleMedium),
           const SizedBox(height: 10),
           Text(
-            'ACAPS: ${p == null ? 'unrated' : '${levelLabels[p].toLowerCase()} probability'}'
+            'ACAPS: ${p == null ? 'unrated' : '${levelLabels[p].toLowerCase()} probability (${probabilityRanges[p]})'}'
             '${risk.impact == null ? '' : ' · impact ${risk.impact}/5'}',
             style: t.bodySmall,
           ),

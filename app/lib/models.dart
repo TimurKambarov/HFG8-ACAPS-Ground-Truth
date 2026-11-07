@@ -1,6 +1,18 @@
-/// ACAPS 5-point probability scale, mapped to numeric probabilities for scoring.
+/// ACAPS 5-point probability scale. Experts forecast on the same scale as
+/// ACAPS, so the two can be compared and scored the same way.
 const levelLabels = ['Very low', 'Low', 'Medium', 'High', 'Very high'];
-const levelProbs = [0.1, 0.3, 0.5, 0.7, 0.9];
+
+/// What each step means, from the ACAPS risk methodology (references/acaps-risk-methodology.pdf).
+const probabilityRanges = ['<10%', '10–33%', '34–66%', '67–90%', '>90%'];
+
+/// Probability used to score each step: the middle of its range, rounded.
+const probabilityScores = [0.05, 0.20, 0.50, 0.80, 0.95];
+
+/// "High (67–90%)" for a value on the 1-5 scale.
+String probabilityText(int v) => '${levelLabels[v - 1]} (${probabilityRanges[v - 1]})';
+
+/// Forecast horizon from the challenge brief.
+const forecastHorizon = Duration(days: 182);
 
 int? parseLevel5(String s) {
   switch (s.trim().toLowerCase()) {
@@ -206,7 +218,7 @@ extension RiskSurvey on Risk {
             SurveyItem(id: t.id, title: t.title, description: t.description, completion: t.completion),
         ];
 
-  /// ACAPS likelihood on the 1-5 survey scale.
+  /// ACAPS probability on the 1-5 forecast scale.
   int? get acapsLikelihood => probabilityIdx == null ? null : probabilityIdx! + 1;
 }
 
@@ -229,28 +241,65 @@ extension AgreementText on Agreement {
       };
 }
 
-const likelihoodLabels = ['Very unlikely', 'Unlikely', 'Even chance', 'Likely', 'Very likely'];
 const severityLabels = ['Minor', 'Moderate', 'Serious', 'Severe', 'Critical'];
 
-/// Answers on one trigger screen.
+/// The group's answer on a 1-5 scale, Delphi-style: the median, and the
+/// range the middle half of answers falls in. The median is robust to one
+/// outlier in a small panel (5-10 experts), and the range shows how far
+/// experts agree, so the group view does not hide disagreement.
+class GroupView {
+  final int n;
+  final double median;
+
+  /// Middle half of answers (interquartile range), as scale steps.
+  final int low, high;
+
+  const GroupView._(this.n, this.median, this.low, this.high);
+
+  static GroupView? of(Iterable<int> answers) {
+    final xs = answers.toList()..sort();
+    if (xs.isEmpty) return null;
+    final n = xs.length;
+    final median = n.isOdd ? xs[n ~/ 2].toDouble() : (xs[n ~/ 2 - 1] + xs[n ~/ 2]) / 2;
+    return GroupView._(n, median, xs[((n - 1) * 0.25).round()], xs[((n - 1) * 0.75).round()]);
+  }
+
+  /// True when the median is a step on the scale (not halfway between two).
+  bool get onStep => median == median.roundToDouble();
+
+  /// "High (67–90%)", or "between Medium and High".
+  String get probability => onStep
+      ? probabilityText(median.round())
+      : 'between ${levelLabels[median.floor() - 1]} and ${levelLabels[median.ceil() - 1]}';
+
+  /// "4 of 5 (Severe)", or "between 3 and 4 of 5".
+  String get severity => onStep
+      ? '${median.round()} of 5 (${severityLabels[median.round() - 1]})'
+      : 'between ${median.floor()} and ${median.ceil()} of 5';
+
+  /// How far experts agree, in words.
+  String spread(List<String> words) => high - low == 0
+      ? 'Experts agree: most said ${words[low - 1]}'
+      : high - low == 1
+          ? 'Most experts between ${words[low - 1]} and ${words[high - 1]}'
+          : 'Opinions split: most experts between ${words[low - 1]} and ${words[high - 1]}';
+}
+
+/// Ground-truthing answers on one trigger screen. Not scored: whether a
+/// trigger "happened" is never recorded, only whether the whole risk did.
 class ItemAnswer {
   final Agreement agree;
-
-  /// 1..5
-  final int likelihood;
 
   /// 1..5
   final int severity;
   final String missing;
 
-  const ItemAnswer({required this.agree, required this.likelihood, required this.severity, this.missing = ''});
+  const ItemAnswer({required this.agree, required this.severity, this.missing = ''});
 
-  Map<String, dynamic> toJson() =>
-      {'agree': agree.index, 'likelihood': likelihood, 'severity': severity, 'missing': missing};
+  Map<String, dynamic> toJson() => {'agree': agree.index, 'severity': severity, 'missing': missing};
 
   factory ItemAnswer.fromJson(Map<String, dynamic> m) => ItemAnswer(
         agree: Agreement.values[(m['agree'] as num).toInt()],
-        likelihood: (m['likelihood'] as num).toInt(),
         severity: (m['severity'] as num).toInt(),
         missing: (m['missing'] as String?) ?? '',
       );
@@ -268,11 +317,18 @@ extension CreditText on Credit {
       };
 }
 
-/// One expert's answers to one risk survey.
+/// One expert's answers to one risk: ground truthing per trigger, plus one
+/// forecast for the whole risk.
 class Response {
   final String expertId;
   final String riskId;
+
+  /// Per trigger: agree, how bad, what's missing (not scored).
   final Map<String, ItemAnswer> items;
+
+  /// "Will this risk materialise within 6 months?" on the ACAPS scale 1..5.
+  /// The only scored answer.
+  final int? forecast;
   final DateTime answeredAt;
   final DateTime? editedAt;
   final bool simulated;
@@ -284,32 +340,44 @@ class Response {
     required this.expertId,
     required this.riskId,
     required this.items,
+    required this.forecast,
     required this.answeredAt,
     this.editedAt,
     this.simulated = false,
     this.credit,
   });
 
+  /// End of the 6-month window the forecast is about.
+  DateTime get resolvesBy => answeredAt.add(forecastHorizon);
+
   Map<String, dynamic> toJson() => {
         'expert': expertId,
         'risk': riskId,
         'items': {for (final e in items.entries) e.key: e.value.toJson()},
+        if (forecast != null) 'forecast': forecast,
         'at': answeredAt.toIso8601String(),
         if (editedAt != null) 'edited': editedAt!.toIso8601String(),
         if (credit != null) 'credit': credit!.name,
       };
 
-  factory Response.fromJson(Map<String, dynamic> m) => Response(
-        expertId: m['expert'] as String,
-        riskId: m['risk'] as String,
-        items: {
-          for (final e in (m['items'] as Map).entries)
-            e.key as String: ItemAnswer.fromJson((e.value as Map).cast<String, dynamic>()),
-        },
-        answeredAt: DateTime.parse(m['at'] as String),
-        editedAt: m['edited'] == null ? null : DateTime.parse(m['edited'] as String),
-        credit: Credit.values.where((c) => c.name == m['credit']).firstOrNull,
-      );
+  factory Response.fromJson(Map<String, dynamic> m) {
+    final rawItems = (m['items'] as Map).cast<String, dynamic>();
+    // Answers saved before the single forecast existed had a likelihood per
+    // trigger: their rounded average becomes the forecast.
+    final old = [for (final v in rawItems.values) ((v as Map)['likelihood'] as num?)?.toDouble()].whereType<double>().toList();
+    final migrated = old.isEmpty ? null : (old.reduce((a, b) => a + b) / old.length).round().clamp(1, 5);
+    return Response(
+      expertId: m['expert'] as String,
+      riskId: m['risk'] as String,
+      items: {
+        for (final e in rawItems.entries) e.key: ItemAnswer.fromJson((e.value as Map).cast<String, dynamic>()),
+      },
+      forecast: (m['forecast'] as num?)?.toInt() ?? migrated,
+      answeredAt: DateTime.parse(m['at'] as String),
+      editedAt: m['edited'] == null ? null : DateTime.parse(m['edited'] as String),
+      credit: Credit.values.where((c) => c.name == m['credit']).firstOrNull,
+    );
+  }
 }
 
 /// A "what is ACAPS missing?" contribution.
