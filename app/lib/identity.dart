@@ -54,6 +54,13 @@ extension AnonymityText on Anonymity {
 
 const anonymousName = 'Anonymous expert';
 
+/// Pseudonyms double as login names (see supabase/migrations/20261107000000_invite_auth.sql):
+/// 3-30 characters, letters, digits, '-' and '_', starting with a letter or digit.
+/// Unique regardless of case, and fixed once the account exists.
+final pseudonymPattern = RegExp(r'^[A-Za-z0-9][A-Za-z0-9_-]{2,29}$');
+
+const pseudonymRule = '3-30 letters, digits, - or _. This is also your login name and cannot be changed later.';
+
 /// Deterministic string hash, kept small so it is identical on web and native.
 int stableHash(String s) =>
     s.codeUnits.fold<int>(7, (a, b) => (a * 31 + b) % 1000003);
