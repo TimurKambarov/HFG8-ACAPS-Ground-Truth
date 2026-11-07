@@ -169,12 +169,16 @@ class _ProfileTabState extends State<ProfileTab> {
             ),
 
             const SectionLabel('Profile'),
+            // The pseudonym is the login name, so it is fixed after sign-up.
             TextField(
               controller: _pseudo,
-              decoration: const InputDecoration(labelText: 'Pseudonym', prefixIcon: Icon(Icons.alternate_email)),
-              onChanged: (v) {
-                if (v.trim().isNotEmpty) appState.updateMe((e) => e.pseudonym = v.trim());
-              },
+              readOnly: true,
+              enabled: false,
+              decoration: const InputDecoration(
+                labelText: 'Pseudonym',
+                prefixIcon: Icon(Icons.alternate_email),
+                helperText: 'Your login name. It cannot be changed.',
+              ),
             ),
             const SizedBox(height: 12),
             CountryField(label: 'Your country', value: me.homeCountry, onChanged: (c) => appState.updateMe((e) => e.homeCountry = c)),

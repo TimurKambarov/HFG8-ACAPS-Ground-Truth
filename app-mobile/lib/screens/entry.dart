@@ -174,7 +174,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   bool get _valid =>
-      _pseudo.text.trim().isNotEmpty && (!_level.needsRealName || (_first.text.trim().isNotEmpty && _last.text.trim().isNotEmpty));
+      pseudonymPattern.hasMatch(_pseudo.text.trim()) && (!_level.needsRealName || (_first.text.trim().isNotEmpty && _last.text.trim().isNotEmpty));
 
   @override
   Widget build(BuildContext context) {
@@ -219,7 +219,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
             decoration: InputDecoration(
               labelText: 'Pseudonym',
               prefixIcon: const Icon(Icons.alternate_email),
-              helperText: _level == Anonymity.anonymous ? 'Only you see it.' : 'What colleagues see.',
+              helperText: '${_level == Anonymity.anonymous ? 'Only you see it.' : 'What colleagues see.'} $pseudonymRule',
+              helperMaxLines: 3,
+              errorText: _pseudo.text.trim().isEmpty || pseudonymPattern.hasMatch(_pseudo.text.trim()) ? null : pseudonymRule,
+              errorMaxLines: 3,
             ),
           ),
           const SizedBox(height: 12),
