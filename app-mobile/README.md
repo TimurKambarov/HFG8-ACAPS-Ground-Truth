@@ -22,6 +22,21 @@ flutter run -d <device-id>      # copy the id from `flutter devices`
 
 In VS Code you can instead pick the phone in the device selector (status bar) and start **app-mobile (phone)** from *Run and Debug*. The first Android build downloads Gradle and takes a few minutes.
 
+### Real login (Supabase)
+
+Started with the Supabase keys, the app shows a **Log in** button on the first screen. Experts log in with
+pseudonym + password, moderators with email + password (same accounts as [`../auth-lab/`](../auth-lab/README.md)):
+
+```powershell
+./app-mobile/run.ps1 -Device <device-id>    # reads SUPABASE_URL + SUPABASE_PUBLISHABLE_KEY from ../API.key
+```
+
+- Sign-up is not in this app yet: create accounts in `auth-lab` with an invite code.
+- After login the app still runs on local demo data. The Supabase profile only decides who you are: a moderator
+  opens the moderator view, an expert gets a local profile created from their `profiles` row the first time.
+  Profile edits in the app are not sent back to Supabase.
+- Plain `flutter run` (or VS Code Run and Debug) has no keys: the Log in button is hidden and only demo users work.
+
 ### Run without the Android SDK
 
 `flutter run -d web-server --web-hostname 0.0.0.0 --web-port 8080`, then open `http://<this computer's IP>:8080` on a phone on the same Wi-Fi.

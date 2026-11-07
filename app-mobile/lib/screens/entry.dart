@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show TextInput;
 
+import '../auth.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets.dart';
@@ -74,6 +76,12 @@ class _InviteScreenState extends State<InviteScreen> {
                     suffixIcon: IconButton(icon: const Icon(Icons.arrow_forward), onPressed: () => _redeem(_code.text)),
                   ),
                 ),
+                if (Auth.configured) ...[
+                  const SizedBox(height: 28),
+                  Text('Already a member?', textAlign: TextAlign.center, style: t.bodyMedium),
+                  const SizedBox(height: 8),
+                  const _LoginButton(),
+                ],
               ],
             ),
           ),
@@ -103,6 +111,11 @@ class SignInScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (Auth.configured) ...[
+                  const SectionLabel('Your account'),
+                  const _LoginButton(),
+                  const SizedBox(height: 8),
+                ],
                 const SectionLabel('Continue as a demo expert'),
                 Text('All users are synthetic. No passwords in the demo.', style: t.bodySmall),
                 const SizedBox(height: 8),
@@ -271,6 +284,133 @@ class _RegisterScreenState extends State<RegisterScreen> {
             child: const Text('Join the group'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LoginButton extends StatelessWidget {
+  const _LoginButton();
+
+  @override
+  Widget build(BuildContext context) => OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const LoginScreen())),
+        icon: const Icon(Icons.login),
+        label: const Text('Log in'),
+      );
+}
+
+/// Real login against Supabase. Experts use their pseudonym, moderators their email.
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _who = TextEditingController();
+  final _pw = TextEditingController();
+  bool _showPw = false;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _who.dispose();
+    _pw.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_busy) return;
+    if (_who.text.trim().isEmpty || _pw.text.isEmpty) {
+      setState(() => _error = 'Enter your pseudonym (or email) and your password.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final profile = await Auth.logIn(_who.text, _pw.text);
+      if (!mounted) return;
+      TextInput.finishAutofillContext();
+      appState.signInAccount(profile);
+      Navigator.of(context).popUntil((r) => r.isFirst);
+    } catch (e) {
+      if (mounted) setState(() => _error = explain(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final isEmail = _who.text.contains('@');
+    return Scaffold(
+      appBar: AppBar(title: const Text('Log in')),
+      body: AutofillGroup(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+          children: [
+            if (!Auth.ready) ...[
+              InfoBanner(icon: Icons.cloud_off_outlined, text: Auth.problem ?? 'Login is not available in this build.'),
+              const SizedBox(height: 16),
+            ],
+            TextField(
+              controller: _who,
+              autofocus: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.next,
+              autofillHints: const [AutofillHints.username, AutofillHints.email],
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                labelText: 'Pseudonym or email',
+                prefixIcon: Icon(isEmail ? Icons.mail_outline : Icons.alternate_email),
+                helperText: isEmail ? 'Logging in as ACAPS moderator.' : 'Experts: your pseudonym. Moderators: your email.',
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _pw,
+              obscureText: !_showPw,
+              autocorrect: false,
+              enableSuggestions: false,
+              textInputAction: TextInputAction.done,
+              autofillHints: const [AutofillHints.password],
+              onSubmitted: (_) => _submit(),
+              decoration: InputDecoration(
+                labelText: 'Password',
+                prefixIcon: const Icon(Icons.lock_outline),
+                suffixIcon: IconButton(
+                  tooltip: _showPw ? 'Hide password' : 'Show password',
+                  icon: Icon(_showPw ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                  onPressed: () => setState(() => _showPw = !_showPw),
+                ),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 14),
+              Text(_error!, style: TextStyle(color: cs.error)),
+            ],
+            const SizedBox(height: 20),
+            FilledButton(
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+              onPressed: _busy || !Auth.ready ? null : _submit,
+              child: _busy
+                  ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5))
+                  : const Text('Log in'),
+            ),
+            const SizedBox(height: 16),
+            Text('Forgot your password? Ask your ACAPS contact.', textAlign: TextAlign.center, style: t.bodySmall),
+          ],
+        ),
       ),
     );
   }

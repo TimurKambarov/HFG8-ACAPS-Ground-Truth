@@ -108,7 +108,11 @@ class _ModeratorShellState extends State<ModeratorShell> {
         ),
         actions: [
           IconButton(tooltip: 'Theme and text size', onPressed: () => showDisplaySettings(context), icon: const Icon(Icons.text_fields)),
-          IconButton(tooltip: 'Switch user', onPressed: appState.signOut, icon: const Icon(Icons.logout)),
+          IconButton(
+            tooltip: appState.sessionAccountId != null ? 'Log out' : 'Switch user',
+            onPressed: appState.signOut,
+            icon: const Icon(Icons.logout),
+          ),
         ],
       ),
       body: wide

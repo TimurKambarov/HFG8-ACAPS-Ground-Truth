@@ -205,8 +205,8 @@ class _ProfileTabState extends State<ProfileTab> {
             const SectionLabel('Demo'),
             OutlinedButton.icon(
               onPressed: appState.signOut,
-              icon: const Icon(Icons.switch_account_outlined),
-              label: const Text('Switch user'),
+              icon: Icon(appState.sessionAccountId != null ? Icons.logout : Icons.switch_account_outlined),
+              label: Text(appState.sessionAccountId != null ? 'Log out' : 'Switch user'),
             ),
             const SizedBox(height: 8),
             if (!_confirmReset)

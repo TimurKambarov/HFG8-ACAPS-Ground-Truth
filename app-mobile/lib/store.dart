@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'auth.dart';
 import 'csv.dart';
 import 'identity.dart';
 import 'models.dart';
@@ -208,6 +209,9 @@ class AppState extends ChangeNotifier {
   String? sessionExpertId;
   bool sessionModerator = false;
 
+  /// Supabase user id when signed in with a real account, null for demo users.
+  String? sessionAccountId;
+
   Future<void> load() async {
     try {
       final raw = await rootBundle.loadString('assets/risk-radar-export.csv');
@@ -228,6 +232,7 @@ class AppState extends ChangeNotifier {
       }
       _restoreUi();
       if (!_restore()) _seed();
+      checkAccountSession();
     } catch (e) {
       error = '$e';
     }
@@ -258,18 +263,62 @@ class AppState extends ChangeNotifier {
   void signInAs(Expert e) {
     sessionExpertId = e.id;
     sessionModerator = false;
+    sessionAccountId = null;
     _changed();
   }
 
   void signInModerator() {
     sessionExpertId = null;
     sessionModerator = true;
+    sessionAccountId = null;
     _changed();
+  }
+
+  /// After a real login (see auth.dart). An expert gets a local record keyed by
+  /// their Supabase user id, created from their profile row the first time.
+  /// Later logins keep the local record, because profile edits in the app are
+  /// not synced to Supabase yet.
+  void signInAccount(AccountProfile p) {
+    if (p.isModerator) {
+      sessionExpertId = null;
+      sessionModerator = true;
+    } else {
+      if (!experts.any((e) => e.id == p.userId)) {
+        final home = p.homeCountry ?? invitePanel ?? 'Chad';
+        experts.add(Expert(
+          id: p.userId,
+          realName: p.realName,
+          pseudonym: p.pseudonym,
+          level: switch (p.anonymity) {
+            'known_to_acaps' => Anonymity.knownToAcaps,
+            'anonymous' => Anonymity.anonymous,
+            _ => Anonymity.pseudonymous,
+          },
+          homeCountry: home,
+          interests: {...p.interests}..remove(home),
+          onRating: p.onRating,
+          notifications: p.notifications,
+          hideFromOtherCountries: p.hideFromOtherCountries,
+        ));
+      }
+      sessionExpertId = p.userId;
+      sessionModerator = false;
+    }
+    sessionAccountId = p.userId;
+    _changed();
+  }
+
+  /// At launch: drop a saved account session that Supabase no longer has
+  /// (logged out, expired, or a build without the Supabase keys).
+  void checkAccountSession() {
+    if (sessionAccountId != null && sessionAccountId != Auth.currentUserId) signOut();
   }
 
   void signOut() {
     sessionExpertId = null;
     sessionModerator = false;
+    sessionAccountId = null;
+    Auth.signOut();
     _changed();
   }
 
@@ -312,6 +361,8 @@ class AppState extends ChangeNotifier {
     invitePanel = null;
     sessionExpertId = null;
     sessionModerator = false;
+    sessionAccountId = null;
+    Auth.signOut();
     _seed();
     _statsCache.clear();
     notifyListeners();
@@ -729,6 +780,7 @@ class AppState extends ChangeNotifier {
         'invite': invitePanel,
         'session': sessionExpertId,
         'moderator': sessionModerator,
+        'account': sessionAccountId,
       }),
     );
   }
@@ -754,6 +806,7 @@ class AppState extends ChangeNotifier {
       invitePanel = m['invite'] as String?;
       sessionExpertId = m['session'] as String?;
       sessionModerator = m['moderator'] == true;
+      sessionAccountId = m['account'] as String?;
       return true;
     } catch (_) {
       return false; // corrupt or old state: start fresh

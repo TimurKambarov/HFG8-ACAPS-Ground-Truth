@@ -99,8 +99,9 @@ clash, Sudan code, expired / used-up codes (`update invite_codes set max_uses = 
 ## Likely next steps
 
 - Finish the untested cases above.
-- Wire the same invite / sign-up / login flow into `../app-mobile/` (the user chose to keep it
-  separate for now; ask before doing this).
+- **Login** is wired into `../app-mobile/` (`lib/auth.dart`, `LoginScreen` in `lib/screens/entry.dart`,
+  started with `app-mobile/run.ps1`). Invite / sign-up for experts and moderators is not wired in yet
+  (the user asked for login only; ask before adding it).
 - Forgot-password: needs the contact email (experts) or real email (moderators) and an email
   provider; not designed yet.
 - Clean-up of test users: Authentication → Users → delete (cascades), then

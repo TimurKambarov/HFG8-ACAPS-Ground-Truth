@@ -1,19 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'auth.dart';
 import 'screens/entry.dart';
 import 'screens/home.dart';
 import 'screens/moderator.dart';
 import 'store.dart';
 import 'theme.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Phone version: portrait only (ignored on web).
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   // A tapped push notification opens the app with ?risk=<id> (web) or the
   // same value from the notification payload (mobile).
   appState.deepLinkRisk = Uri.base.queryParameters['risk'];
+  // Real login (only when started with the Supabase keys, see run.ps1).
+  // Must finish before load(), which checks the saved account session.
+  await Auth.init(onSignedOut: () {
+    if (appState.sessionAccountId != null) appState.signOut();
+  });
   appState.load();
   runApp(const GroundTruthApp());
 }
