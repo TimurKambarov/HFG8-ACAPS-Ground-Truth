@@ -571,7 +571,10 @@ class _GapLabel extends StatelessWidget {
         Icon(up ? Icons.trending_up : (down ? Icons.trending_down : Icons.trending_flat), size: 16, color: color),
         const SizedBox(width: 3),
         Flexible(
-          child: Text('likelihood: experts ${experts.toStringAsFixed(1)} vs ACAPS $acaps',
+          // [experts] is the group's median forecast; halfway means between two steps.
+          child: Text(
+              'Forecast: experts ${experts == experts.roundToDouble() ? levelLabels[experts.round() - 1] : '${levelLabels[experts.floor() - 1]}–${levelLabels[experts.ceil() - 1]}'}'
+              ' · ACAPS ${levelLabels[acaps - 1]}',
               style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 12.5)),
         ),
       ],
@@ -616,7 +619,7 @@ extension RiskSortText on RiskSort {
   String get label => switch (this) {
         RiskSort.toReview => 'Most comments to review',
         RiskSort.disagreement => 'Most disagreement with ACAPS',
-        RiskSort.gap => 'Biggest likelihood gap',
+        RiskSort.gap => 'Biggest forecast gap with ACAPS',
         RiskSort.responseRate => 'Lowest response rate',
         RiskSort.level => 'Highest risk level',
         RiskSort.id => 'Risk ID',
@@ -1087,6 +1090,24 @@ class ModRiskDetail extends StatelessWidget {
                   ),
                 ),
               ),
+              if (s.answered > 0) ...[
+                const SizedBox(height: 8),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Forecast: will it materialise within 6 months?', style: t.labelLarge),
+                        const SizedBox(height: 6),
+                        _GroupForecast(risk: r),
+                        Distribution(counts: _forecastCounts(r), acaps: r.acapsLikelihood, labels: forecastButtonLabels),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
 
               SectionLabel('Triggers · ${r.triggers.length}'),
               if (r.triggers.isEmpty)
@@ -2005,12 +2026,12 @@ class _PublishSheetState extends State<_PublishSheet> {
           if (n < minPanel)
             InfoBanner(icon: Icons.visibility_off_outlined, text: 'Only $n respondents: no results or names are published for this risk. The export contains the ACAPS rating only.')
           else ...[
-            Text('${r.oneLiner}\n$n experts · ACAPS likelihood ${r.acapsLikelihood ?? '-'}/5', style: t.titleSmall),
-            for (final it in r.surveyItems) ...[
-              const SizedBox(height: 14),
-              Text(it.title, style: t.labelLarge),
-              Distribution(counts: _likelihoodCounts(appState.answersFor(r, it.id)), acaps: r.acapsLikelihood),
-            ],
+            Text('${r.oneLiner}\n$n experts', style: t.titleSmall),
+            const SizedBox(height: 14),
+            Text('Forecast: will it materialise within 6 months?', style: t.labelLarge),
+            const SizedBox(height: 6),
+            _GroupForecast(risk: r),
+            Distribution(counts: _forecastCounts(r), acaps: r.acapsLikelihood, labels: forecastButtonLabels),
           ],
         ],
       ),
@@ -2018,12 +2039,19 @@ class _PublishSheetState extends State<_PublishSheet> {
   }
 }
 
-List<int> _likelihoodCounts(List<ItemAnswer> xs) {
-  final c = List.filled(5, 0);
-  for (final a in xs) {
-    c[a.likelihood - 1]++;
+List<int> _forecastCounts(Risk r) => countsOf(appState.forecastsFor(r));
+
+/// "Group: High (67–90%)" and how far experts agree, same as experts see it.
+class _GroupForecast extends StatelessWidget {
+  final Risk risk;
+  const _GroupForecast({required this.risk});
+
+  @override
+  Widget build(BuildContext context) {
+    final g = GroupView.of(appState.forecastsFor(risk));
+    if (g == null) return const SizedBox.shrink();
+    return GroupLine(answer: g.probability, spread: g.spread(levelLabels), n: g.n, noun: 'forecast');
   }
-  return c;
 }
 
 // ===========================================================================

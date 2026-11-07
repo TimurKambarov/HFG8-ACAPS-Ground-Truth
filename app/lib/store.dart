@@ -29,11 +29,11 @@ String inviteCodeFor(String country) {
   return 'GT-${letters.substring(0, min(4, letters.length))}-$tail';
 }
 
-/// Likelihood 1..5 -> probability used for Brier scoring.
-const likelihoodProbs = [0.1, 0.3, 0.5, 0.7, 0.9];
-
-double brier(int likelihood, bool happened) =>
-    pow(likelihoodProbs[likelihood - 1] - (happened ? 1 : 0), 2).toDouble();
+/// Brier score of a forecast on the ACAPS scale (1..5): squared gap between
+/// its probability (the middle of the ACAPS range) and what happened.
+/// 0 = perfect, 1 = worst.
+double brier(int forecast, bool happened) =>
+    pow(probabilityScores[forecast - 1] - (happened ? 1 : 0), 2).toDouble();
 
 class Points {
   static const usefulComment = 25;
@@ -159,7 +159,7 @@ class RiskModStats {
 
   double get responseRate => panel == 0 ? 0 : answered / panel;
 
-  /// Experts' mean likelihood minus ACAPS (positive = experts see it as more likely).
+  /// Experts' median forecast minus ACAPS (positive = experts see it as more likely).
   double? get gap => expertLikelihood == null || acapsLikelihood == null ? null : expertLikelihood! - acapsLikelihood!;
 }
 
@@ -389,6 +389,7 @@ class AppState extends ChangeNotifier {
     sessionExpertId = null;
     sessionModeratorId = null;
     _bannerDismissed.clear();
+    autoOpened.clear(); // a reset demo shows the entry pop-up again
     risks.removeWhere((r) => r.custom);
     _seed();
     _statsCache.clear();
@@ -495,7 +496,7 @@ class AppState extends ChangeNotifier {
     return out;
   }
 
-  void submit(Risk r, Map<String, ItemAnswer> items, {Credit? credit}) {
+  void submit(Risk r, Map<String, ItemAnswer> items, {required int forecast, Credit? credit}) {
     final e = me;
     // Closed risks are read-only: no new or changed forecasts.
     if (e == null || r.isResolved) return;
@@ -506,6 +507,7 @@ class AppState extends ChangeNotifier {
       expertId: e.id,
       riskId: r.id,
       items: Map.of(items),
+      forecast: forecast.clamp(1, 5),
       answeredAt: prev?.answeredAt ?? now,
       editedAt: prev == null ? null : now,
       credit: credit ?? prev?.credit,
@@ -535,6 +537,12 @@ class AppState extends ChangeNotifier {
           if (responseOf(e, r)?.items[itemId] case final a?) a,
       ];
 
+  /// The panel's forecasts for the whole risk (1..5).
+  List<int> forecastsFor(Risk r) => [
+        for (final e in panelForRisk(r))
+          if (responseOf(e, r)?.forecast case final f?) f,
+      ];
+
   /// Simulated history for synthetic experts. Personas never have simulated
   /// answers on active risks, so whoever demos them can take the survey.
   Response? _simulated(Expert e, Risk r) {
@@ -544,23 +552,32 @@ class AppState extends ChangeNotifier {
     if (r.id != 'R1043' && Random(stableHash('${e.id}|${r.id}')).nextDouble() > e.participation) return null;
 
     final base = r.acapsLikelihood ?? 3;
+
+    // One forecast for the whole risk: close to ACAPS, and on closed risks
+    // skilled experts lean towards what actually happened.
+    final fr = Random(stableHash('${e.id}|${r.id}|forecast'));
+    var forecast = base + const [-2, -1, -1, 0, 0, 0, 0, 1, 1, 2][fr.nextInt(10)];
+    if (r.isResolved && fr.nextDouble() < e.skill * 0.8) forecast += r.materialised ? 1 : -1;
+    forecast = forecast.clamp(1, 5);
+
+    // Ground truthing per trigger: agreement follows how far the expert's
+    // view of that trigger sits from ACAPS.
     final items = <String, ItemAnswer>{};
     for (final it in r.surveyItems) {
       final rnd = Random(stableHash('${e.id}|${r.id}|${it.id}'));
-      var l = base + const [-2, -1, -1, 0, 0, 0, 0, 1, 1, 2][rnd.nextInt(10)];
-      if (it.completion != null && it.completion! <= 15) l -= 1;
-      if (r.isResolved && rnd.nextDouble() < e.skill * 0.7) l += r.materialised ? 1 : -1;
-      l = l.clamp(1, 5);
-      final s = ((r.impact ?? 3) + const [-1, 0, 0, 0, 1][rnd.nextInt(5)]).clamp(1, 5);
-      final d = (l - base).abs();
+      var view = forecast + const [-1, 0, 0, 0, 1][rnd.nextInt(5)];
+      if (it.completion != null && it.completion! <= 15) view -= 1;
+      final d = (view - base).abs();
       final agree = d == 0 ? Agreement.yes : (d == 1 ? Agreement.partly : Agreement.no);
-      items[it.id] = ItemAnswer(agree: agree, likelihood: l, severity: s);
+      final s = ((r.impact ?? 3) + const [-1, 0, 0, 0, 1][rnd.nextInt(5)]).clamp(1, 5);
+      items[it.id] = ItemAnswer(agree: agree, severity: s);
     }
     final days = r.isResolved ? 190 + stableHash(r.id) % 60 : 1 + stableHash('${e.id}${r.id}') % 3;
     return Response(
       expertId: e.id,
       riskId: r.id,
       items: items,
+      forecast: forecast,
       answeredAt: DateTime(2026, 11, 6).subtract(Duration(days: days)),
       simulated: true,
     );
@@ -570,12 +587,12 @@ class AppState extends ChangeNotifier {
   // Scoring & rating
   // =========================================================================
 
-  /// Only likelihood is scored (Brier), against whether the risk materialised.
+  /// Only the one forecast per risk is scored (Brier), against whether the
+  /// risk materialised. ACAPS's own rating is scored the same way.
   ForecastScore? scoreOf(Response resp) {
     final r = byId(resp.riskId);
-    if (r == null || !r.isResolved || r.acapsLikelihood == null || resp.items.isEmpty) return null;
-    final mine = resp.items.values.map((a) => brier(a.likelihood, r.materialised)).reduce((a, b) => a + b) /
-        resp.items.length;
+    if (r == null || !r.isResolved || r.acapsLikelihood == null || resp.forecast == null) return null;
+    final mine = brier(resp.forecast!, r.materialised);
     final acaps = brier(r.acapsLikelihood!, r.materialised);
     return ForecastScore(mine, acaps, Points.forecast(mine));
   }
@@ -613,6 +630,14 @@ class AppState extends ChangeNotifier {
       if (cs.any((c) => c.usedInRiskId != null)) Award.cited,
       if (responsesOf(e).length >= 5) Award.regular,
     };
+  }
+
+  /// Place by accuracy among experts in the rating with enough matured
+  /// forecasts (the Super estimator ranking); null if not ranked yet.
+  ({int rank, int of})? accuracyRank(Expert e) {
+    final xs = _brierRanked();
+    final i = xs.indexWhere((x) => x.id == e.id);
+    return i < 0 ? null : (rank: i + 1, of: xs.length);
   }
 
   List<Expert> _brierRanked() {
@@ -695,13 +720,14 @@ class AppState extends ChangeNotifier {
   int get commentsToReview => comments.where((c) => c.needsReview).length;
 
   /// Moderator view of one risk: response rate, comments, and how far the
-  /// experts' likelihood sits from the ACAPS rating.
+  /// experts' forecast sits from the ACAPS probability.
   RiskModStats modStats(Risk r) {
     final panel = panelForRisk(r);
     final answered = respondents(r);
     final all = [for (final it in r.surveyItems) ...answersFor(r, it.id)];
     final cs = commentsOn(r);
-    final mean = all.isEmpty ? null : all.fold(0, (s, a) => s + a.likelihood) / all.length;
+    // Group forecast = median (Delphi-style; one outlier cannot drag it).
+    final mean = GroupView.of(forecastsFor(r))?.median;
     final disagree = all.isEmpty
         ? 0.0
         : all.fold(0.0, (s, a) => s + (a.agree == Agreement.no ? 1 : (a.agree == Agreement.partly ? 0.5 : 0))) / all.length;
@@ -805,7 +831,17 @@ class AppState extends ChangeNotifier {
       return c;
     }
 
-    double? mean(List<int> xs) => xs.isEmpty ? null : double.parse((xs.reduce((a, b) => a + b) / xs.length).toStringAsFixed(2));
+    // Delphi-style group view: median and the middle half of answers.
+    Map<String, dynamic> group(List<int> xs, String Function(GroupView g) label) {
+      final g = GroupView.of(xs);
+      return {
+        'distribution_1_5': dist(xs),
+        'median_1_5': g?.median,
+        'median_label': g == null ? null : label(g),
+        'middle_half_1_5': g == null ? null : [g.low, g.high],
+      };
+    }
+
     return {
       'risk_id': r.id,
       'title': r.title,
@@ -813,28 +849,39 @@ class AppState extends ChangeNotifier {
       'status': r.status,
       'acaps': {
         'probability': r.probabilityIdx == null ? null : levelLabels[r.probabilityIdx!],
-        'likelihood_1_5': r.acapsLikelihood,
+        'probability_range': r.probabilityIdx == null ? null : probabilityRanges[r.probabilityIdx!],
+        'probability_1_5': r.acapsLikelihood,
         'impact_1_5': r.impact,
         'risk_level': r.level.isEmpty ? null : r.level,
       },
       'respondents': n,
       'published': n >= minPanel,
-      if (n >= minPanel)
-        'questions': [
-          for (final it in r.surveyItems)
-            () {
-              final a = answersFor(r, it.id);
-              final l = [for (final x in a) x.likelihood], s = [for (final x in a) x.severity];
-              return {
-                'id': it.id,
-                'title': it.title,
-                'answers': a.length,
-                'agreement_with_acaps': {for (final g in Agreement.values) g.name: a.where((x) => x.agree == g).length},
-                'likelihood': {'distribution_1_5': dist(l), 'mean': mean(l)},
-                'severity': {'distribution_1_5': dist(s), 'mean': mean(s)},
-              };
-            }(),
-        ],
+      if (n >= minPanel) ...() {
+        final f = forecastsFor(r);
+        return {
+          // The one scored question, on the ACAPS probability scale.
+          'forecast': {
+            'question': 'Will this risk materialise within 6 months?',
+            'answers': f.length,
+            ...group(f, (g) => g.probability),
+          },
+          // Ground truthing per trigger (not scored).
+          'questions': [
+            for (final it in r.surveyItems)
+              () {
+                final a = answersFor(r, it.id);
+                final s = [for (final x in a) x.severity];
+                return {
+                  'id': it.id,
+                  'title': it.title,
+                  'answers': a.length,
+                  'agreement_with_acaps': {for (final g in Agreement.values) g.name: a.where((x) => x.agree == g).length},
+                  'severity': group(s, (g) => g.severity),
+                };
+              }(),
+          ],
+        };
+      }(),
       if (n >= minPanel && credits) ...() {
         final cs = creditsFor(r);
         return {
@@ -849,9 +896,12 @@ class AppState extends ChangeNotifier {
 
   /// A file ready to publish: one risk, or every risk with enough respondents.
   String publicViewJson(Iterable<Risk> rs, {bool credits = false}) => const JsonEncoder.withIndent('  ').convert({
-        'schema': 'acaps-ground-truth/public-view/v1',
+        'schema': 'acaps-ground-truth/public-view/v2',
         'generated_at': DateTime.now().toUtc().toIso8601String(),
         'min_respondents': minPanel,
+        'probability_scale': {
+          for (var i = 0; i < 5; i++) '${i + 1}': {'label': levelLabels[i], 'range': probabilityRanges[i]},
+        },
         'risks': [for (final r in rs) publicView(r, credits: credits)],
       });
 
@@ -929,7 +979,7 @@ class AppState extends ChangeNotifier {
       Comment(id: 's9', riskId: 'R1043', itemId: 'R1043 - T0620', authorId: 'e8',
           text: 'I see little sign of proxy mobilisation yet; this trigger looks overrated.',
           agreeIds: {}, disagreeIds: {'e4', 'e5', 'e6'}, reviewed: true, reviewedBy: 'm3'),
-      // Persona history: shows moderator feedback under Profile -> My forecasts.
+      // Persona history: shows moderator feedback under the My forecasts tab.
       Comment(id: 's5', riskId: 'R0002', itemId: byId('R0002')?.surveyItems.first.id ?? 'risk', authorId: 'p1',
           text: 'Fighting is pushing traders off the El Geneina - Adre route; watch fuel prices in Adre market.',
           agreeIds: {'e4', 'e6', 'e7', 'e9'}, disagreeIds: {'e11'}, useful: true, usefulBy: 'm1', usedInRiskId: 'R1043', usedBy: 'm1',

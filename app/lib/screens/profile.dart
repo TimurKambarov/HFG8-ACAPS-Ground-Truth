@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../store.dart';
 import '../widgets.dart';
-import 'my_answers.dart';
 
 class ProfileTab extends StatefulWidget {
   const ProfileTab({super.key});
@@ -114,13 +113,7 @@ class _ProfileTabState extends State<ProfileTab> {
               ],
             ),
 
-            const SizedBox(height: 16),
-            FilledButton.tonalIcon(
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MyAnswersScreen())),
-              icon: const Icon(Icons.history),
-              label: const Text('My forecasts'),
-            ),
+            // Forecasts and comment feedback live in the My forecasts tab.
 
             const SectionLabel('Anonymity level'),
             for (final opt in Anonymity.values)

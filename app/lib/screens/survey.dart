@@ -26,23 +26,21 @@ void notNow(BuildContext context, Risk r) {
 
 class _Draft {
   Agreement? agree;
-  int? likelihood;
   int? severity;
   final TextEditingController missing;
 
   _Draft([ItemAnswer? a])
       : agree = a?.agree,
-        likelihood = a?.likelihood,
         severity = a?.severity,
         missing = TextEditingController(text: a?.missing ?? '');
 
-  bool get complete => agree != null && likelihood != null && severity != null;
+  bool get complete => agree != null && severity != null;
 
-  ItemAnswer toAnswer() =>
-      ItemAnswer(agree: agree!, likelihood: likelihood!, severity: severity!, missing: missing.text.trim());
+  ItemAnswer toAnswer() => ItemAnswer(agree: agree!, severity: severity!, missing: missing.text.trim());
 }
 
-/// Risk survey: intro -> one screen per trigger -> thank you + group summary.
+/// Risk survey: intro -> one ground-truthing screen per trigger -> one
+/// scored forecast for the whole risk -> thank you + group summary.
 class SurveyScreen extends StatefulWidget {
   final Risk risk;
   final SurveyStart start;
@@ -58,14 +56,18 @@ class SurveyScreen extends StatefulWidget {
 class _SurveyScreenState extends State<SurveyScreen> {
   late final List<SurveyItem> items = widget.risk.surveyItems;
   late final Map<String, _Draft> drafts;
-  late int step; // 0 = intro, 1..n = items, n+1 = summary
+  late int step; // 0 = intro, 1..n = triggers, n+1 = forecast, n+2 = summary
   bool _details = false;
 
   /// How to credit me if this risk is published; starts from my profile.
   Credit? _credit;
 
+  /// The one scored answer: ACAPS probability scale 1..5.
+  int? _forecast;
+
   Risk get r => widget.risk;
-  int get summaryStep => items.length + 1;
+  int get forecastStep => items.length + 1;
+  int get summaryStep => items.length + 2;
 
   @override
   void initState() {
@@ -73,6 +75,7 @@ class _SurveyScreenState extends State<SurveyScreen> {
     final me = appState.me;
     final existing = me == null ? null : appState.responseOf(me, r);
     drafts = {for (final it in items) it.id: _Draft(existing?.items[it.id])};
+    _forecast = existing?.forecast;
     _credit = me == null ? null : (existing?.credit ?? defaultCredit(me));
     step = switch (widget.start) {
       // Closed risks are read-only: straight to what happened and the group view.
@@ -94,7 +97,7 @@ class _SurveyScreenState extends State<SurveyScreen> {
   void _go(int s) {
     FocusScope.of(context).unfocus();
     if (s == summaryStep) {
-      appState.submit(r, {for (final e in drafts.entries) e.key: e.value.toAnswer()}, credit: _credit);
+      appState.submit(r, {for (final e in drafts.entries) e.key: e.value.toAnswer()}, forecast: _forecast!, credit: _credit);
     }
     setState(() => step = s);
   }
@@ -102,6 +105,7 @@ class _SurveyScreenState extends State<SurveyScreen> {
   @override
   Widget build(BuildContext context) {
     final inItems = step >= 1 && step <= items.length;
+    final inQuestions = step >= 1 && step <= forecastStep;
     return ListenableBuilder(
       listenable: appState,
       builder: (context, _) => Scaffold(
@@ -109,15 +113,17 @@ class _SurveyScreenState extends State<SurveyScreen> {
           title: Text(
             step == 0
                 ? r.id
-                : (inItems
-                    ? '${r.id} · ${items.length == 1 ? 'Question' : 'Trigger'} $step of ${items.length}'
-                    : (r.isResolved ? '${r.id} · What happened' : 'Group summary')),
+                : inItems
+                    ? '${r.id} · ${items.length == 1 ? 'The risk' : 'Trigger $step of ${items.length}'}'
+                    : step == forecastStep
+                        ? '${r.id} · Your forecast'
+                        : (r.isResolved ? '${r.id} · What happened' : 'Group summary'),
             style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
           ),
-          bottom: inItems
+          bottom: inQuestions
               ? PreferredSize(
                   preferredSize: const Size.fromHeight(4),
-                  child: LinearProgressIndicator(value: step / items.length, minHeight: 4),
+                  child: LinearProgressIndicator(value: step / forecastStep, minHeight: 4),
                 )
               : null,
         ),
@@ -134,11 +140,17 @@ class _SurveyScreenState extends State<SurveyScreen> {
                         total: items.length,
                         draft: drafts[items[step - 1].id]!,
                         onChanged: () => setState(() {}),
-                        footer: step == items.length && appState.me != null && _credit != null
-                            ? CreditPicker(expert: appState.me!, value: _credit!, onChanged: (c) => setState(() => _credit = c))
-                            : null,
                       )
-                    : _Summary(risk: r),
+                    : step == forecastStep
+                        ? _ForecastPage(
+                            risk: r,
+                            value: _forecast,
+                            onSelect: (v) => setState(() => _forecast = v),
+                            footer: appState.me != null && _credit != null
+                                ? CreditPicker(expert: appState.me!, value: _credit!, onChanged: (c) => setState(() => _credit = c))
+                                : null,
+                          )
+                        : _Summary(risk: r),
           ),
         ),
         bottomNavigationBar: SafeArea(
@@ -173,9 +185,9 @@ class _SurveyScreenState extends State<SurveyScreen> {
         ],
       );
     }
-    if (step <= items.length) {
-      final d = drafts[items[step - 1].id]!;
-      final last = step == items.length;
+    if (step <= forecastStep) {
+      final last = step == forecastStep;
+      final ok = last ? _forecast != null : drafts[items[step - 1].id]!.complete;
       return Row(
         children: [
           OutlinedButton(
@@ -186,7 +198,7 @@ class _SurveyScreenState extends State<SurveyScreen> {
           const SizedBox(width: 10),
           Expanded(
             child: FilledButton(
-              onPressed: d.complete ? () => _go(step + 1) : null,
+              onPressed: ok ? () => _go(step + 1) : null,
               child: Text(last ? 'Send answers' : 'Next'),
             ),
           ),
@@ -230,7 +242,8 @@ class _SurveyScreenState extends State<SurveyScreen> {
         RiskHeader(risk: r),
         const SizedBox(height: 16),
         Text(
-          '${items.length} short ${items.length == 1 ? 'screen' : 'screens'}, about 2 minutes. '
+          '${items.length + 1} short screens, about 2 minutes: '
+          '${items.length == 1 ? 'the risk' : '${items.length} triggers'}, then one forecast. '
           'You answer before you see the group, so your view stays independent.',
           style: t.bodyMedium,
         ),
@@ -296,7 +309,7 @@ class _SurveyScreenState extends State<SurveyScreen> {
 }
 
 // ---------------------------------------------------------------------------
-// One trigger, four questions
+// One trigger, three ground-truthing questions (not scored)
 // ---------------------------------------------------------------------------
 
 class _ItemPage extends StatefulWidget {
@@ -306,10 +319,7 @@ class _ItemPage extends StatefulWidget {
   final _Draft draft;
   final VoidCallback onChanged;
 
-  /// Shown under the questions (the credit choice on the last screen).
-  final Widget? footer;
-
-  const _ItemPage({required this.item, required this.index, required this.total, required this.draft, required this.onChanged, this.footer});
+  const _ItemPage({required this.item, required this.index, required this.total, required this.draft, required this.onChanged});
 
   @override
   State<_ItemPage> createState() => _ItemPageState();
@@ -394,16 +404,11 @@ class _ItemPageState extends State<_ItemPage> {
         ),
         _Question(
           n: 2,
-          text: 'How likely is it to happen in the next 6 months?',
-          child: ScalePicker(value: d.likelihood, labels: likelihoodLabels, onSelect: (v) => set(() => d.likelihood = v)),
-        ),
-        _Question(
-          n: 3,
           text: 'How bad would it be?',
           child: ScalePicker(value: d.severity, labels: severityLabels, onSelect: (v) => set(() => d.severity = v)),
         ),
         _Question(
-          n: 4,
+          n: 3,
           text: 'What is ACAPS missing?',
           optional: true,
           child: TextField(
@@ -428,7 +433,71 @@ class _ItemPageState extends State<_ItemPage> {
             ),
           ],
         ),
-        if (widget.footer != null) ...[const SizedBox(height: 24), widget.footer!],
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The one scored question: will the whole risk materialise in 6 months?
+// ---------------------------------------------------------------------------
+
+/// ACAPS's scale with its ranges, as shown on the forecast buttons.
+final forecastButtonLabels = [for (var i = 0; i < 5; i++) '${levelLabels[i]}\n${probabilityRanges[i]}'];
+
+class _ForecastPage extends StatelessWidget {
+  final Risk risk;
+  final int? value;
+  final ValueChanged<int> onSelect;
+
+  /// The credit choice, on this last screen.
+  final Widget? footer;
+
+  const _ForecastPage({required this.risk, required this.value, required this.onSelect, this.footer});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final by = DateTime.now().add(forecastHorizon);
+    final acaps = risk.acapsLikelihood;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      children: [
+        Row(
+          children: [
+            Icon(Icons.track_changes, size: 16, color: cs.primary),
+            const SizedBox(width: 6),
+            Text('YOUR FORECAST · SCORED',
+                style: TextStyle(fontSize: 11.5, letterSpacing: 1, fontWeight: FontWeight.w800, color: cs.primary)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text('Will this risk materialise before ${formatDate(by)}?', style: t.titleLarge),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
+          child: Text(risk.title, style: t.bodyMedium),
+        ),
+        const SizedBox(height: 20),
+        ScalePicker(value: value, labels: forecastButtonLabels, onSelect: onSelect),
+        const SizedBox(height: 10),
+        Text(
+          [
+            if (value != null) 'You: ${probabilityText(value!)}.',
+            if (acaps != null) 'ACAPS: ${probabilityText(acaps)}.',
+          ].join('  '),
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'This is the one answer that is scored. When ACAPS records whether the risk materialised, '
+          'you get up to 100 points for accuracy. The scale and ranges are ACAPS\'s own, so your '
+          'forecast is scored exactly like theirs.',
+          style: t.bodySmall,
+        ),
+        if (footer != null) ...[const SizedBox(height: 24), footer!],
       ],
     );
   }
@@ -627,7 +696,10 @@ class _Summary extends StatelessWidget {
           const SectionLabel('Your forecast matured'),
           MaturedBlock(risk: risk, response: mine),
         ],
-        // Per question: results, then what colleagues say ACAPS is missing, then the next question.
+        const SectionLabel('Forecast: will it materialise within 6 months?'),
+        ForecastSummary(risk: risk, mine: mine?.forecast),
+        const SectionLabel('Triggers'),
+        // Per trigger: results, then what colleagues say ACAPS is missing, then the next trigger.
         for (var i = 0; i < items.length; i++) ...[
           QuestionHeader(number: i + 1, total: items.length, title: items[i].title),
           ItemSummary(risk: risk, item: items[i], mine: mine?.items[items[i].id]),
@@ -717,6 +789,68 @@ class _SplitRow extends StatelessWidget {
   }
 }
 
+/// Counts per step 1..5.
+List<int> countsOf(Iterable<int> xs) {
+  final c = List.filled(5, 0);
+  for (final x in xs) {
+    c[x - 1]++;
+  }
+  return c;
+}
+
+/// Headline of a group view: the median in bold, then how far experts agree.
+class GroupLine extends StatelessWidget {
+  final String answer;
+  final String spread;
+  final int n;
+  final String noun;
+  const GroupLine({super.key, required this.answer, required this.spread, required this.n, required this.noun});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Group: $answer', style: t.titleSmall),
+        const SizedBox(height: 2),
+        Text('$spread · $n ${n == 1 ? noun : '${noun}s'}', style: t.bodySmall),
+      ],
+    );
+  }
+}
+
+/// The group's forecasts for the whole risk on the ACAPS scale: the median
+/// as the group answer, the spread, and every answer in the chart with
+/// "you" and ACAPS marked.
+class ForecastSummary extends StatelessWidget {
+  final Risk risk;
+  final int? mine;
+  const ForecastSummary({super.key, required this.risk, required this.mine});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final fs = appState.forecastsFor(risk);
+    final g = GroupView.of(fs);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (g == null)
+              Text('No forecasts yet.', style: t.labelLarge)
+            else
+              GroupLine(answer: g.probability, spread: g.spread(levelLabels), n: g.n, noun: 'forecast'),
+            Distribution(counts: countsOf(fs), mine: mine, acaps: risk.acapsLikelihood, labels: forecastButtonLabels),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class ItemSummary extends StatelessWidget {
   final Risk risk;
   final SurveyItem item;
@@ -747,10 +881,11 @@ class ItemSummary extends StatelessWidget {
             const SizedBox(height: 8),
             AgreementBar(counts: agree, mine: mine?.agree),
             const SizedBox(height: 16),
-            Text('Likelihood in 6 months', style: t.labelLarge),
-            Distribution(counts: count((a) => a.likelihood), mine: mine?.likelihood, acaps: risk.acapsLikelihood),
-            const SizedBox(height: 12),
             Text('How bad it would be', style: t.labelLarge),
+            if (GroupView.of(answers.map((a) => a.severity)) case final g?) ...[
+              const SizedBox(height: 6),
+              GroupLine(answer: g.severity, spread: g.spread(const ['1', '2', '3', '4', '5']), n: g.n, noun: 'answer'),
+            ],
             Distribution(counts: count((a) => a.severity), mine: mine?.severity, acaps: risk.impact),
           ],
         ),
@@ -900,7 +1035,10 @@ class Distribution extends StatelessWidget {
   final List<int> counts;
   final int? mine;
   final int? acaps;
-  const Distribution({super.key, required this.counts, this.mine, this.acaps});
+
+  /// Words under the numbers (e.g. the ACAPS probability ranges).
+  final List<String>? labels;
+  const Distribution({super.key, required this.counts, this.mine, this.acaps, this.labels});
 
   @override
   Widget build(BuildContext context) {
@@ -940,6 +1078,10 @@ class Distribution extends StatelessWidget {
                 cell(Column(
                   children: [
                     Text('$i', style: TextStyle(fontWeight: mine == i ? FontWeight.w800 : FontWeight.w500)),
+                    if (labels != null)
+                      Text(labels![i - 1],
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 9.5, height: 1.15, color: cs.onSurfaceVariant)),
                     if (mine == i)
                       const Text('you are here', textAlign: TextAlign.center, style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800)),
                     if (acaps == i)
@@ -978,8 +1120,10 @@ class MaturedBlock extends StatelessWidget {
             children: [
               Icon(happened ? Icons.warning_amber_rounded : Icons.shield_outlined, color: accent),
               const SizedBox(width: 8),
-              Text(happened ? 'What happened: it materialised' : 'What happened: it did not materialise',
-                  style: t.titleSmall?.copyWith(color: accent)),
+              Expanded(
+                child: Text(happened ? 'What happened: it materialised' : 'What happened: it did not materialise',
+                    style: t.titleSmall?.copyWith(color: accent)),
+              ),
             ],
           ),
           if (text.isNotEmpty) ...[
@@ -987,7 +1131,13 @@ class MaturedBlock extends StatelessWidget {
             Text(text, style: t.bodySmall?.copyWith(height: 1.45)),
           ],
           if (s != null) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
+            Text(
+              'Your forecast: ${probabilityText(response!.forecast!)}'
+              '${risk.acapsLikelihood == null ? '' : ' · ACAPS: ${probabilityText(risk.acapsLikelihood!)}'}',
+              style: t.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
             Row(
               children: [
                 ScoreBox(label: 'Your accuracy', value: '${accuracyPct(s.mine)}%', highlight: true),
@@ -1000,7 +1150,7 @@ class MaturedBlock extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               '${s.mine < s.acaps - 0.005 ? 'You were closer than ACAPS.' : s.mine > s.acaps + 0.005 ? 'ACAPS was closer this time.' : 'Same as ACAPS.'} '
-              'Accuracy: how close your "how likely" answers were to what happened (100% = perfect). Only likelihood is scored.',
+              'Accuracy: how close your forecast was to what happened (100% = perfect). Only the forecast is scored.',
               style: t.bodySmall,
             ),
           ],

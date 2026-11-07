@@ -83,8 +83,9 @@ void main() {
 
       s.submit(r, {
         for (final it in r.surveyItems)
-          it.id: ItemAnswer(agree: Agreement.partly, likelihood: 4, severity: 4, missing: it.id == r.surveyItems.first.id ? 'Watch Tiné' : ''),
-      });
+          it.id: ItemAnswer(agree: Agreement.partly, severity: 4, missing: it.id == r.surveyItems.first.id ? 'Watch Tiné' : ''),
+      }, forecast: 4);
+      expect(s.responseOf(s.me!, r)?.forecast, 4);
       expect(s.respondents(r).length, 6);
       expect(s.commentsOn(r).where((c) => c.authorId == 'p1').length, 1);
       expect(s.pendingNotification?.id, isNot('R1043'));
