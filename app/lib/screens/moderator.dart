@@ -11,6 +11,7 @@ import '../theme.dart';
 import '../widgets.dart';
 import 'home.dart';
 import 'risk_filter.dart';
+import 'import_risk.dart';
 import 'risk_form.dart';
 import 'survey.dart';
 
@@ -98,6 +99,27 @@ class _ModeratorShellState extends State<ModeratorShell> {
     _openRisk(r);
   }
 
+  /// Risks tab → "Import": pick a risk from the live ACAPS Risk Radar API,
+  /// review it in the prefilled form, publish (screens/import_risk.dart).
+  /// The screen returns the published risk; we confirm and open it, like
+  /// after "New risk".
+  Future<void> _importRisk() async {
+    final r = await Navigator.of(context).push<Risk>(MaterialPageRoute(builder: (_) => const ImportRiskScreen()));
+    if (r == null || !mounted) return;
+    final n = appState.panelForRisk(r).length;
+    final msg = r.isActive
+        ? '${r.id} imported from ACAPS and published to $n ${n == 1 ? 'expert' : 'experts'}'
+        : '${r.id} imported from ACAPS into the Archive';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    _openRisk(r);
+  }
+
+  /// Risks tab → "Sync statuses": compare the app with the live Risk Radar and
+  /// apply the Active / Archive changes the moderator ticks. The screen does
+  /// all the work itself and returns nothing.
+  Future<void> _syncStatuses() => Navigator.of(context)
+      .push<void>(MaterialPageRoute(builder: (_) => const ImportRiskScreen(mode: RadarMode.syncStatuses)));
+
   @override
   Widget build(BuildContext context) {
     final wide = _wide;
@@ -125,7 +147,7 @@ class _ModeratorShellState extends State<ModeratorShell> {
           index: _tab,
           children: [
             _InboxTab(onOpenReview: _openReview),
-            _RisksTab(filter: _filter, selectedId: _selectedRisk, onSelect: _openRisk, onReview: _openReview, onNewRisk: _newRisk),
+            _RisksTab(filter: _filter, selectedId: _selectedRisk, onSelect: _openRisk, onReview: _openReview, onNewRisk: _newRisk, onImportRisk: _importRisk, onSyncStatuses: _syncStatuses),
             _CommentsTab(
               selectedId: _reviewRisk,
               focusTrigger: _reviewTrigger,
@@ -653,7 +675,9 @@ class _RisksTab extends StatelessWidget {
   final ValueChanged<Risk> onSelect;
   final OpenReview onReview;
   final VoidCallback onNewRisk;
-  const _RisksTab({required this.filter, required this.selectedId, required this.onSelect, required this.onReview, required this.onNewRisk});
+  final VoidCallback onImportRisk;
+  final VoidCallback onSyncStatuses;
+  const _RisksTab({required this.filter, required this.selectedId, required this.onSelect, required this.onReview, required this.onNewRisk, required this.onImportRisk, required this.onSyncStatuses});
 
   @override
   Widget build(BuildContext context) {
@@ -664,7 +688,7 @@ class _RisksTab extends StatelessWidget {
         return _SplitView(
           list: ListenableBuilder(
             listenable: filter,
-            builder: (context, _) => _RiskList(filter: filter, selectedId: split ? selectedId : null, onSelect: onSelect, onNewRisk: onNewRisk),
+            builder: (context, _) => _RiskList(filter: filter, selectedId: split ? selectedId : null, onSelect: onSelect, onNewRisk: onNewRisk, onImportRisk: onImportRisk, onSyncStatuses: onSyncStatuses),
           ),
           detail: selected == null ? null : ModRiskDetail(key: ValueKey(selected.id), risk: selected, onReview: onReview),
           emptyText: 'Pick a risk on the left.',
@@ -679,7 +703,9 @@ class _RiskList extends StatefulWidget {
   final String? selectedId;
   final ValueChanged<Risk> onSelect;
   final VoidCallback onNewRisk;
-  const _RiskList({required this.filter, required this.selectedId, required this.onSelect, required this.onNewRisk});
+  final VoidCallback onImportRisk;
+  final VoidCallback onSyncStatuses;
+  const _RiskList({required this.filter, required this.selectedId, required this.onSelect, required this.onNewRisk, required this.onImportRisk, required this.onSyncStatuses});
 
   @override
   State<_RiskList> createState() => _RiskListState();
@@ -704,17 +730,42 @@ class _RiskListState extends State<_RiskList> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
       children: [
-        Row(
-          children: [
-            Expanded(child: Text('Risks', style: t.headlineSmall)),
-            FilledButton.tonalIcon(
-              style: FilledButton.styleFrom(minimumSize: const Size(0, 40)),
-              onPressed: widget.onNewRisk,
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('New risk'),
-            ),
-          ],
-        ),
+        // Header: "Risks" + three actions. Two of them use the ACAPS API
+        // (Sync statuses, Import), the third is the manual New risk form.
+        // LayoutBuilder gives us the width of *this list* (not the screen),
+        // which matters in the desktop split view where the list is narrow.
+        LayoutBuilder(builder: (context, box) {
+          // A narrow list (phones, the split view) only has room for the icons.
+          final wide = box.maxWidth >= 560;
+          // Same button in two sizes: with a label when there is room, else an
+          // outlined icon; the tooltip says what it does in both cases.
+          Widget apiButton(String label, String tip, IconData icon, VoidCallback onTap) => wide
+              ? Tooltip(
+                  message: tip,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 40)),
+                    onPressed: onTap,
+                    icon: Icon(icon, size: 18),
+                    label: Text(label),
+                  ),
+                )
+              : IconButton.outlined(tooltip: tip, onPressed: onTap, icon: Icon(icon, size: 20));
+          return Row(
+            children: [
+              Expanded(child: Text('Risks', style: t.headlineSmall)),
+              apiButton('Sync statuses', 'Update Active / Archive status from the ACAPS Risk Radar API', Icons.sync, widget.onSyncStatuses),
+              const SizedBox(width: 8),
+              apiButton('Import', 'Import a new risk from the ACAPS Risk Radar API', Icons.cloud_download_outlined, widget.onImportRisk),
+              const SizedBox(width: 8),
+              FilledButton.tonalIcon(
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 40)),
+                onPressed: widget.onNewRisk,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('New risk'),
+              ),
+            ],
+          );
+        }),
         const SizedBox(height: 10),
         Row(
           children: [

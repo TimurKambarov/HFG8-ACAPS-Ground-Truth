@@ -1,0 +1,26 @@
+{
+  // Background tasks used by launch.json.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // CORS proxy for the ACAPS API, needed by "Import" in the web build.
+      // Starts once and keeps running; if port 8787 is already taken
+      // (proxy started by hand), the task fails but the running proxy still works.
+      "label": "ACAPS API proxy",
+      "type": "shell",
+      "command": "dart run tool/acaps_proxy.dart",
+      "options": { "cwd": "${workspaceFolder}/app" },
+      "isBackground": true,
+      "presentation": { "reveal": "silent", "panel": "dedicated" },
+      "problemMatcher": {
+        "owner": "acaps-proxy",
+        "pattern": { "regexp": "^__never__$" },
+        "background": {
+          "activatesForAllTasks": true,
+          "beginsPattern": ".",
+          "endsPattern": "ACAPS API proxy on|Proxy error|SocketException"
+        }
+      }
+    }
+  ]
+}

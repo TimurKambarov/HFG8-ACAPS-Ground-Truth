@@ -233,6 +233,9 @@ class ForecastScore {
 
 class AppState extends ChangeNotifier {
   List<Risk> risks = [];
+
+  /// The risks as in the bundled Risk Radar export, before any sync or edits.
+  List<Risk> _bundledRisks = const [];
   bool loaded = false;
   String? error;
   SharedPreferences? _prefs;
@@ -387,6 +390,9 @@ class AppState extends ChangeNotifier {
         }
         return Risk.fromRow(m);
       }).toList();
+      // Untouched copy of the export, so Reset demo can undo imports and
+      // status syncs (see resetDemo).
+      _bundledRisks = List.unmodifiable(risks);
 
       try {
         _prefs = await SharedPreferences.getInstance();
@@ -651,7 +657,10 @@ class AppState extends ChangeNotifier {
     sessionModeratorId = null;
     _bannerDismissed.clear();
     autoOpened.clear(); // a reset demo shows the entry pop-up again
-    risks.removeWhere((r) => r.custom);
+    // Back to the export exactly as shipped: drops imported / app-made risks
+    // and every status synced from the ACAPS API.
+    risks = [..._bundledRisks];
+    _radarUpdates.clear();
     _seed();
     _statsCache.clear();
     notifyListeners();
@@ -1141,6 +1150,73 @@ class AppState extends ChangeNotifier {
     _changed();
   }
 
+  // =========================================================================
+  // Status sync with the ACAPS Risk Radar API
+  // =========================================================================
+  //
+  // The app has two kinds of risks, and they are saved differently:
+  //   * risks from the bundled CSV export: re-read from the CSV at every
+  //     start, never saved as a whole (custom == false);
+  //   * risks made in the app or imported from the API: saved in full on the
+  //     device under 'custom_risks' (custom == true).
+  // A status change on a custom risk is simply saved with it. For a CSV risk
+  // we save only the change ("R1037 is now Materialised") in _radarUpdates and
+  // replay it on top of the CSV at every start (see _restore). That keeps the
+  // CSV the single source for everything else, and Reset demo can undo the
+  // sync by forgetting the changes.
+  //
+  // Why status matters so much: it decides where a risk lives.
+  //   Active                         -> experts can answer (survey, forecast)
+  //   Materialised / Not materialised -> Archive: read-only, and the forecasts
+  //                                     experts gave are scored (Brier score)
+  //                                     against what really happened.
+
+  /// Status updates from the API for risks of the bundled export, by id:
+  /// {'status': ..., 'materialisation': ...}. Saved on the device and applied
+  /// on top of the export at every start; Reset demo clears them.
+  final Map<String, Map<String, String>> _radarUpdates = {};
+
+  /// Risks in the app whose status differs from the Risk Radar. Risks the API
+  /// does not list are left alone.
+  ///
+  /// Compared case- and space-insensitively ("Active " == "active"), because
+  /// the export and the API are not always typed the same way. Pure function:
+  /// changes nothing, so the screen can call it on every rebuild.
+  List<StatusChange> statusChanges(Iterable<Risk> fromApi) => [
+        for (final a in fromApi)
+          // Only risks the app has (`case final r?` = "if not null, call it r").
+          if (byId(a.id) case final r?)
+            if (a.status.trim().toLowerCase() != r.status.trim().toLowerCase())
+              StatusChange(r, a.status.trim(), a.materialisation),
+      ];
+
+  /// Applies the status changes. Answers given while a risk was active are
+  /// kept: once it closes they are the forecasts that get scored.
+  void applyStatusChanges(Iterable<StatusChange> changes) {
+    for (final c in changes) {
+      final i = risks.indexWhere((x) => x.id == c.risk.id);
+      if (i < 0) continue; // risk deleted meanwhile: nothing to update
+      // Keep our "what happened" text if the API has none.
+      final mat = c.materialisation.isEmpty ? null : c.materialisation;
+      risks[i] = risks[i].withStatus(c.to, materialisation: mat);
+      // CSV risks: remember the change so it survives a restart (see above).
+      if (!risks[i].custom) {
+        _radarUpdates[c.risk.id] = {'status': c.to, if (mat != null) 'materialisation': mat};
+      }
+    }
+    _changed(); // clears cached stats (scores change!), redraws, saves
+  }
+
+  /// Replays the saved status changes on top of the freshly loaded CSV.
+  /// Called from _restore, after the experts' answers are loaded.
+  void _applyRadarUpdates() {
+    for (var i = 0; i < risks.length; i++) {
+      final u = _radarUpdates[risks[i].id];
+      if (u == null || risks[i].custom) continue;
+      risks[i] = risks[i].withStatus(u['status']!, materialisation: u['materialisation']);
+    }
+  }
+
   /// Only risks created in the app can be deleted; Risk Radar risks stay.
   void deleteRisk(Risk r) {
     if (!r.custom) return;
@@ -1421,6 +1497,7 @@ class AppState extends ChangeNotifier {
         'responses': [for (final r in _responses.values) r.toJson()],
         'comments': [for (final c in comments) c.toJson()],
         'custom_risks': [for (final r in risks.where((r) => r.custom)) r.toJson()],
+        'radar_updates': _radarUpdates, // statuses synced from the ACAPS API (CSV risks only)
         'skipped': {for (final e in _skipped.entries) e.key: e.value.toList()},
         'invite': invitePanel,
         'invite_code': pendingInviteCode,
@@ -1469,6 +1546,17 @@ class AppState extends ChangeNotifier {
       risks
         ..removeWhere((r) => r.custom)
         ..addAll([for (final r in (m['custom_risks'] as List? ?? const [])) Risk.fromJson((r as Map).cast<String, dynamic>())]);
+      // After the responses: answers given while a risk was still active stay.
+      // (The loop above drops answers on risks that are closed *in the CSV*;
+      // a risk closed later by a sync must keep its answers, because those are
+      // exactly the forecasts we now score. So the sync is replayed only now.)
+      _radarUpdates
+        ..clear()
+        ..addAll({
+          for (final e in ((m['radar_updates'] as Map?) ?? const {}).entries)
+            e.key as String: (e.value as Map).cast<String, String>(),
+        });
+      _applyRadarUpdates();
       return true;
     } catch (_) {
       return false; // corrupt or old state: start fresh

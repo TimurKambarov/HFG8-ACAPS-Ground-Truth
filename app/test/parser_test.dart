@@ -22,4 +22,37 @@ void main() {
     expect(t.first.description, 'Additional drone strikes near the border');
     expect(t.first.completion, 40);
   });
+
+  test('Risk Radar API record maps to a Risk', () {
+    final r = Risk.fromApi({
+      'risk_id': 'R1037',
+      'risk_title': 'Escalating violence reignites civil war\n',
+      'risk_type': 'Marked deterioration in an existing crisis',
+      'iso3': ['SSD'],
+      'country': ['South Sudan'],
+      'rationale': 'Clashes rose. [ACLED 08/04/2026](https://acleddata.com)',
+      'probability': 'High',
+      'impact': '4',
+      'risk_level': 'High',
+      'risk_trend': null,
+      'status': 'Active',
+      'hazard_materialisation_description': null,
+      'impact_materialisation_description': null,
+      'expected_exposure': '>500,000',
+      'expected_priority_needs': 'Food security Health',
+      'triggers_summary': 'Trigger ID: R1037 - T0603\nTitle: Fighting in Upper Nile\nDescription: \nShelling near Nasir\n',
+    });
+    expect(r.id, 'R1037');
+    expect(r.title, 'Escalating violence reignites civil war');
+    expect(r.country, 'South Sudan');
+    expect(r.iso, 'SSD');
+    expect(r.rationale, 'Clashes rose. ACLED 08/04/2026');
+    expect(r.probabilityIdx, 3);
+    expect(r.impact, 4);
+    expect(r.isActive, isTrue);
+    expect(r.custom, isTrue);
+    expect(r.trend, '');
+    expect(r.triggers.single.title, 'Fighting in Upper Nile');
+    expect(r.triggers.single.description, 'Shelling near Nasir');
+  });
 }
