@@ -3,7 +3,7 @@
 The Ground Truth app for experts and ACAPS moderators, built for **Android and iOS phones**. Features: sign-up
 with an invite or referral code, log in, referral codes and progress, moderator invites, search and filters, the
 survey, group view, rating and the expert-input export. The full expert and moderator flow is described in the
-README of the earlier browser build (`git show origin/app-auth-api:app/README.md`).
+README of the earlier browser build (`git show effd385:app/README.md`).
 
 This folder combines two branches:
 
