@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../design.dart';
+import '../brand.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
@@ -44,215 +44,89 @@ class _InviteScreenState extends State<InviteScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // The cover is always night, whatever the theme: the first impression.
-    final contrast = appState.theme == AppTheme.contrast;
-    return Theme(
-      data: contrast ? buildContrastTheme() : buildTheme(Brightness.dark),
-      child: Builder(builder: (context) {
-        final t = Theme.of(context).textTheme;
-        final cs = Theme.of(context).colorScheme;
-        return Scaffold(
-          body: SafeArea(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
+    final t = Theme.of(context).textTheme;
+    return Scaffold(
+      body: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          const _Hero(subtitle: 'A trusted, closed network of humanitarian experts. A few minutes a week to ground-truth ACAPS risk analysis.'),
+          // Key figures strip, as on the website's data blocks.
+          const _KeyFacts(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const _TopBar(),
-                const SizedBox(height: 8),
-                const _Constellation(height: 200),
-                const SizedBox(height: 18),
-                Text('Ground\nTruth', style: t.displaySmall?.copyWith(fontSize: 56, height: 0.95, letterSpacing: -2)),
-                const SizedBox(height: 14),
-                Text(
-                  'A trusted, closed network of humanitarian experts. A few minutes a week to ground-truth ACAPS risk analysis.',
-                  style: t.bodyLarge?.copyWith(color: cs.onSurfaceVariant),
-                ),
-                const SizedBox(height: 22),
-                const _Facts(),
-                const SizedBox(height: 26),
-                Text('Join with the invite link you received from ACAPS', style: t.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
-                const SizedBox(height: 6),
-                Text('Your link is your way in: it is personal and works once. '
-                    'In the demo, Register uses one of the demo invite links.',
-                    style: t.bodySmall),
-                const SizedBox(height: 16),
-                FilledButton(
-                  onPressed: _openDemoLink,
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [Text('Register'), SizedBox(width: 10), Icon(Icons.arrow_forward, size: 20)],
+                EdgeCard(
+                  edge: AppColors.teal,
+                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Eyebrow('New member'),
+                      const SizedBox(height: 6),
+                      Text('Join with the invite link you received from ACAPS', style: t.titleMedium),
+                      const SizedBox(height: 6),
+                      Text('Your link is your way in: it is personal and works once. '
+                          'In the demo, Register uses one of the demo invite links.',
+                          style: t.bodySmall),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: _openDemoLink,
+                        icon: const Icon(Icons.person_add_alt),
+                        label: const Text('Register'),
+                      ),
+                      if (_error != null) ...[
+                        const SizedBox(height: 10),
+                        InfoBanner(icon: Icons.link_off, color: Theme.of(context).colorScheme.error, text: _error!),
+                      ],
+                    ],
                   ),
                 ),
-                if (_error != null) ...[
-                  const SizedBox(height: 10),
-                  InfoBanner(icon: Icons.link_off, color: cs.error, text: _error!),
-                ],
-                const SizedBox(height: 10),
-                OutlinedButton(
-                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(56)),
-                  onPressed: appState.openLogin,
-                  child: const Text('Log in'),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    const Expanded(child: Divider()),
+                    Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: Text('Already a member?', style: t.bodySmall)),
+                    const Expanded(child: Divider()),
+                  ],
                 ),
-                const SizedBox(height: 10),
-                Text('Already a member? Log in with your pseudonym.', textAlign: TextAlign.center, style: t.bodySmall),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                  onPressed: appState.openLogin,
+                  icon: const Icon(Icons.login),
+                  label: const Text('Log in'),
+                ),
               ],
             ),
           ),
-        );
-      }),
-    );
-  }
-}
-
-/// "GROUND TRUTH · ACAPS" and the display settings.
-class _TopBar extends StatelessWidget {
-  const _TopBar();
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Row(
-      children: [
-        const AcapsMark(size: 12),
-        const SizedBox(width: 8),
-        Expanded(child: Text('GROUND TRUTH · FOR ACAPS', style: mono(11.5, weight: FontWeight.w700, color: cs.onSurface, spacing: 1.6))),
-        IconButton(
-          tooltip: 'Theme and text size',
-          onPressed: () => showDisplaySettings(context),
-          icon: Icon(Icons.text_fields, color: cs.onSurface),
-        ),
-      ],
-    );
-  }
-}
-
-/// Three promises as numbers.
-class _Facts extends StatelessWidget {
-  const _Facts();
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    Widget fact(String big, String small) => Expanded(
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(10, 10, 6, 10),
-            decoration: BoxDecoration(border: Border(left: BorderSide(color: cs.onSurface, width: 2))),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(big, style: mono(24, weight: FontWeight.w700, color: cs.onSurface, spacing: -0.5)),
-                const SizedBox(height: 2),
-                Text(small, style: TextStyle(fontSize: 12, height: 1.25, color: cs.onSurfaceVariant)),
-              ],
-            ),
-          ),
-        );
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        fact('5–10', 'experts per country, invited'),
-        fact('2 min', 'per risk, about once a week'),
-        fact('0', 'names in anything made public'),
-      ],
-    );
-  }
-}
-
-/// A field of anonymous experts as dots. One is you (blue, with a halo);
-/// the ink square is ACAPS. The dots come on one by one.
-class _Constellation extends StatefulWidget {
-  final double height;
-  const _Constellation({required this.height});
-
-  @override
-  State<_Constellation> createState() => _ConstellationState();
-}
-
-class _ConstellationState extends State<_Constellation> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600));
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
-      _c.value = 1;
-    } else if (_c.value == 0 && !_c.isAnimating) {
-      _c.forward();
-    }
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: widget.height,
-      width: double.infinity,
-      child: AnimatedBuilder(
-        animation: _c,
-        builder: (context, _) => CustomPaint(
-          painter: _ConstellationPainter(t: _c.value, dot: cs.onSurfaceVariant, ink: cs.onSurface, you: youColor(context)),
-        ),
+        ],
       ),
     );
   }
 }
 
-class _ConstellationPainter extends CustomPainter {
-  final double t;
-  final Color dot, ink, you;
-  _ConstellationPainter({required this.t, required this.dot, required this.ink, required this.you});
+/// Three facts about taking part, as big numbers.
+class _KeyFacts extends StatelessWidget {
+  const _KeyFacts();
 
   @override
-  void paint(Canvas canvas, Size size) {
-    const cols = 13, rows = 7;
-    final dx = size.width / cols, dy = size.height / rows;
-    // Deterministic "panels": clusters of brighter dots around a few centres.
-    final centres = [const Offset(2.5, 2), const Offset(6, 4.5), const Offset(10, 2.2)];
-    var k = 0;
-    Offset? youAt;
-    for (var r = 0; r < rows; r++) {
-      for (var c = 0; c < cols; c++) {
-        k++;
-        final at = Offset(dx * (c + 0.5), dy * (r + 0.5));
-        final near = centres.any((p) => (Offset(c.toDouble(), r.toDouble()) - p).distance < 1.6);
-        final appear = ((t * 1.4) - (k / (rows * cols))).clamp(0.0, 1.0);
-        if (appear <= 0) continue;
-        if (r == 4 && c == 6) {
-          youAt = at;
-          continue;
-        }
-        if (r == 2 && c == 10) {
-          final s = 9.0 * appear;
-          canvas.drawRect(Rect.fromCenter(center: at, width: s, height: s), Paint()..color = ink);
-          continue;
-        }
-        canvas.drawCircle(at, (near ? 4.2 : 2.2) * appear, Paint()..color = near ? dot : dot.withAlpha(90));
-      }
-    }
-    if (youAt != null && t > 0.55) {
-      final a = ((t - 0.55) / 0.45).clamp(0.0, 1.0);
-      // Ripples around you: your view reaches the group, your name does not.
-      for (final (r, alpha) in const [(34.0, 50), (24.0, 90)]) {
-        canvas.drawCircle(
-            youAt,
-            r * a,
-            Paint()
-              ..color = you.withAlpha((alpha * a).round())
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = 1.5);
-      }
-      canvas.drawCircle(youAt, 14 * a, Paint()..color = you.withAlpha(60));
-      canvas.drawCircle(youAt, 7 * a, Paint()..color = you);
-    }
+  Widget build(BuildContext context) {
+    return Container(
+      color: Theme.of(context).colorScheme.surfaceContainerLowest,
+      padding: const EdgeInsets.fromLTRB(12, 18, 12, 16),
+      margin: const EdgeInsets.only(bottom: 12),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: KeyFigure(value: '2', label: 'minutes per risk')),
+          Expanded(child: KeyFigure(value: '6', label: 'month forecast window')),
+          Expanded(child: KeyFigure(value: '3', label: 'levels of anonymity')),
+        ],
+      ),
+    );
   }
-
-  @override
-  bool shouldRepaint(_ConstellationPainter old) => old.t != t || old.you != you || old.dot != dot;
 }
 
 /// Log in as an existing member (for the MVP: pick a synthetic demo user or
@@ -272,7 +146,7 @@ class SignInScreen extends StatelessWidget {
       body: ListView(
         padding: EdgeInsets.zero,
         children: [
-          const _Hero(subtitle: 'Log in'),
+          const _Hero(subtitle: 'Log in', compact: true),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
             child: Column(
@@ -302,7 +176,7 @@ class SignInScreen extends StatelessWidget {
                     child: Card(
                       child: ListTile(
                         leading: Avatar(nameSeenBy(e, ViewerRole.expert)),
-                        title: Text(e.pseudonym, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        title: Text(e.pseudonym, style: const TextStyle(fontWeight: FontWeight.w700)),
                         subtitle: Text('Level ${e.level.number}: ${e.level.label} · ${e.homeCountry}'),
                         trailing: const Icon(Icons.chevron_right),
                         onTap: () => appState.signInAs(e),
@@ -317,13 +191,12 @@ class SignInScreen extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(vertical: 5),
                     child: Card(
                       child: ListTile(
-                        leading: Container(
-                          width: 36,
-                          height: 36,
-                          color: cs.onSurface,
-                          child: Icon(Icons.admin_panel_settings_outlined, color: cs.surface, size: 20),
+                        leading: CircleAvatar(
+                          backgroundColor: cs.brightness == Brightness.light ? AppColors.navy : cs.primaryContainer,
+                          child: Icon(Icons.admin_panel_settings_outlined,
+                              color: cs.brightness == Brightness.light ? Colors.white : cs.onPrimaryContainer),
                         ),
-                        title: Text(m.name, style: const TextStyle(fontWeight: FontWeight.w800)),
+                        title: Text(m.name, style: const TextStyle(fontWeight: FontWeight.w700)),
                         subtitle: const Text('ACAPS moderator'),
                         trailing: const Icon(Icons.chevron_right),
                         onTap: () => appState.signInModerator(m.id),
@@ -457,14 +330,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
             title: const Text('Take part in the rating'),
             subtitle: const Text('You appear under the name your level allows.'),
           ),
-        ],
-      ),
-      // Always in reach, at the bottom of the screen.
-      bottomNavigationBar: SafeArea(
-        child: Container(
-          decoration: BoxDecoration(border: Border(top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant))),
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-          child: FilledButton(
+          const SizedBox(height: 20),
+          FilledButton(
             onPressed: _valid
                 ? () {
                     appState.register(
@@ -480,46 +347,36 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     Navigator.of(context).popUntil((r) => r.isFirst);
                   }
                 : null,
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [Text('Join the group'), SizedBox(width: 10), Icon(Icons.arrow_forward, size: 20)],
-            ),
+            child: const Text('Join the group'),
           ),
-        ),
+        ],
       ),
     );
   }
 }
 
-/// Compact night band for the log-in screen: same marks as the cover.
+/// Navy hero with contour lines and the large pin, like the ACAPS website's
+/// navy bands.
 class _Hero extends StatelessWidget {
   final String subtitle;
-  const _Hero({required this.subtitle});
+  final bool compact;
+  const _Hero({required this.subtitle, this.compact = false});
 
   @override
   Widget build(BuildContext context) {
-    final contrast = appState.theme == AppTheme.contrast;
-    return Theme(
-      data: contrast ? buildContrastTheme() : buildTheme(Brightness.dark),
-      child: Builder(builder: (context) {
-        final t = Theme.of(context).textTheme;
-        final cs = Theme.of(context).colorScheme;
-        return Container(
-          color: cs.surface,
-          padding: EdgeInsets.fromLTRB(20, MediaQuery.paddingOf(context).top + 8, 20, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const _TopBar(),
-              const _Constellation(height: 90),
-              const SizedBox(height: 8),
-              Text('Ground Truth', style: t.headlineMedium),
-              const SizedBox(height: 4),
-              Text(subtitle.toUpperCase(), style: mono(12, weight: FontWeight.w700, color: cs.onSurfaceVariant, spacing: 1.4)),
-            ],
-          ),
-        );
-      }),
+    return BrandHeader(
+      eyebrow: 'ACAPS · Expert network',
+      title: 'Ground Truth',
+      titleSize: compact ? 46 : 60,
+      subtitle: subtitle,
+      seed: compact ? 7 : 3,
+      actions: [
+        IconButton(
+          tooltip: 'Theme and text size',
+          onPressed: () => showDisplaySettings(context),
+          icon: const Icon(Icons.text_fields),
+        ),
+      ],
     );
   }
 }

@@ -4,19 +4,20 @@ import '../models.dart';
 import '../store.dart';
 import '../widgets.dart';
 
-const _riskTypes = [
-  'New emerging risk',
-  'Marked deterioration in an existing crisis',
-  'Future impact of a hazard which has already taken place',
-];
 const _riskLevels = ['Low', 'Medium', 'High'];
 const _maxTriggers = 3;
 
 /// Moderator form to add a risk, or edit one that was added in the app.
+/// With [fromApi], [initial] is a risk pulled from the ACAPS Risk Radar API:
+/// the form is prefilled for review and publishes it under its ACAPS id.
 /// Pops with the saved [Risk], or null when cancelled.
 class RiskFormScreen extends StatefulWidget {
   final Risk? initial;
-  const RiskFormScreen({super.key, this.initial});
+  final bool fromApi;
+
+  /// When ACAPS last updated the imported risk, shown in the review banner.
+  final String? apiUpdated;
+  const RiskFormScreen({super.key, this.initial, this.fromApi = false, this.apiUpdated});
 
   @override
   State<RiskFormScreen> createState() => _RiskFormScreenState();
@@ -39,10 +40,13 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
   late final Risk? r0 = widget.initial;
   late final _title = TextEditingController(text: r0?.title);
   late final _rationale = TextEditingController(text: r0?.rationale);
-  late final _exposure = TextEditingController(text: r0?.exposure);
-  late final _needs = TextEditingController(text: r0?.needs);
+  /// ACAPS categories, picked from the same lists as the Risk Radar.
+  late int? _exposure = r0?.exposureIdx;
+  late final Set<String> _needs = {...?r0?.needList.where(priorityNeeds.contains)};
   late final List<String> _countries = r0 == null ? [] : AppState.riskCountries(r0!);
-  late String _type = _riskTypes.contains(r0?.type) ? r0!.type : _riskTypes.first;
+  // Keep a type from the API even if it is not one of the three usual ones.
+  late final List<String> _types = [...riskTypes, if (r0 != null && r0!.type.isNotEmpty && !riskTypes.contains(r0!.type)) r0!.type];
+  late String _type = _types.contains(r0?.type) ? r0!.type : riskTypes.first;
   late int? _prob = r0?.probabilityIdx;
   late int? _impact = r0?.impact;
   late String? _level = _riskLevels.contains(r0?.level) ? r0!.level : null;
@@ -54,7 +58,7 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
 
   @override
   void dispose() {
-    for (final c in [_title, _rationale, _exposure, _needs]) {
+    for (final c in [_title, _rationale]) {
       c.dispose();
     }
     for (final t in _triggers) {
@@ -79,20 +83,23 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
     setState(() => _tried = true);
     if (_missing.isNotEmpty) return;
     final id = r0?.id ?? appState.nextRiskId();
+    final country = _countries.join(', ');
     final risk = Risk(
       custom: true,
       id: id,
       title: _title.text.trim(),
       type: _type,
-      country: _countries.join(', '),
+      country: country,
+      // The ISO codes only still match if the countries were left as they were.
+      iso: r0 != null && r0!.country == country ? r0!.iso : '',
       rationale: _rationale.text.trim(),
       probabilityIdx: _prob,
       impact: _impact,
       level: _level!,
       trend: r0?.trend ?? '',
       status: r0?.status ?? 'Active',
-      exposure: _exposure.text.trim(),
-      needs: _needs.text.trim(),
+      exposure: _exposure == null ? '' : exposureBands[_exposure!],
+      needs: priorityNeeds.where(_needs.contains).join(', '),
       materialisation: r0?.materialisation ?? '',
       triggers: [
         for (var i = 0; i < _triggers.length; i++)
@@ -112,7 +119,16 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
     final reach = appState.experts.where((e) => _countries.any(e.inPanel)).length;
-    final editing = r0 != null;
+    // The form has three modes, decided by what it was opened with:
+    //   new risk   (no initial risk)        -> "New risk", button "Publish"
+    //   edit       (initial, not fromApi)   -> "Edit R1050", button "Save"
+    //   imported   (initial + fromApi)      -> "Review R1037 from ACAPS",
+    //              button "Publish", banners explaining where the data is from.
+    final imported = widget.fromApi && r0 != null;
+    final editing = r0 != null && !imported;
+    // A risk ACAPS already closed can still be imported (for the record), but
+    // it lands in the Archive: we warn before publishing.
+    final inactive = imported && !r0!.isActive;
 
     Widget err(bool bad) => !_tried || !bad
         ? const SizedBox()
@@ -129,7 +145,7 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(editing ? 'Edit ${r0!.id}' : 'New risk'),
+        title: Text(imported ? 'Review ${r0!.id} from ACAPS' : (editing ? 'Edit ${r0!.id}' : 'New risk')),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 8),
@@ -146,6 +162,35 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  // Import mode: up to three banners above the usual fields.
+                  // The fields themselves are the normal ones, prefilled, so the
+                  // moderator reviews an API risk exactly like a hand-made one.
+                  if (imported) ...[
+                    const SizedBox(height: 8),
+                    InfoBanner(
+                      icon: Icons.cloud_download_outlined,
+                      color: cs.primary,
+                      text: 'Pulled from the ACAPS Risk Radar API'
+                          '${(widget.apiUpdated ?? '').isEmpty ? '' : ' (last updated ${widget.apiUpdated})'}. '
+                          'Check every field, edit if needed, then publish it to experts.',
+                    ),
+                    if (inactive) ...[
+                      const SizedBox(height: 8),
+                      InfoBanner(
+                        icon: Icons.inventory_2_outlined,
+                        color: cs.error,
+                        text: 'Status in Risk Radar: ${r0!.status.isEmpty ? 'none' : r0!.status}. '
+                            'It goes to the Archive: experts can read it, but not answer it.',
+                      ),
+                    ],
+                    if (r0!.triggers.length > _maxTriggers) ...[
+                      const SizedBox(height: 8),
+                      InfoBanner(
+                        icon: Icons.info_outline,
+                        text: 'ACAPS lists ${r0!.triggers.length} triggers. Experts are asked about the first $_maxTriggers; remove or reorder them below.',
+                      ),
+                    ],
+                  ],
                   const SectionLabel('Risk'),
                   TextField(
                     controller: _title,
@@ -158,7 +203,7 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
                     expandedInsets: EdgeInsets.zero,
                     initialSelection: _type,
                     label: const Text('Type'),
-                    dropdownMenuEntries: [for (final x in _riskTypes) DropdownMenuEntry(value: x, label: x)],
+                    dropdownMenuEntries: [for (final x in _types) DropdownMenuEntry(value: x, label: x)],
                     onSelected: (v) {
                       if (v != null) setState(() => _type = v);
                     },
@@ -300,10 +345,33 @@ class _RiskFormScreenState extends State<RiskFormScreen> {
                       ),
                     ),
 
-                  const SectionLabel('More (optional)'),
-                  TextField(controller: _exposure, minLines: 1, maxLines: 4, decoration: const InputDecoration(labelText: 'Expected exposure')),
-                  const SizedBox(height: 10),
-                  TextField(controller: _needs, minLines: 1, maxLines: 4, decoration: const InputDecoration(labelText: 'Expected priority needs')),
+                  const SectionLabel('Categories (optional)'),
+                  DropdownMenu<int?>(
+                    expandedInsets: EdgeInsets.zero,
+                    initialSelection: _exposure,
+                    label: const Text('Expected exposure'),
+                    leadingIcon: const Icon(Icons.groups_outlined),
+                    dropdownMenuEntries: [
+                      const DropdownMenuEntry(value: null, label: 'Not set'),
+                      for (var i = 0; i < exposureBands.length; i++) DropdownMenuEntry(value: i, label: '${exposureBands[i]} people'),
+                    ],
+                    onSelected: (v) => setState(() => _exposure = v),
+                  ),
+                  const SizedBox(height: 12),
+                  Text('Expected priority needs', style: t.bodyMedium),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final n in priorityNeeds)
+                        FilterChip(
+                          label: Text(n),
+                          selected: _needs.contains(n),
+                          onSelected: (on) => setState(() => on ? _needs.add(n) : _needs.remove(n)),
+                        ),
+                    ],
+                  ),
 
                   const SizedBox(height: 24),
                   if (_tried && _missing.isNotEmpty) ...[

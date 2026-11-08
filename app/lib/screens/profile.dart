@@ -1,25 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../design.dart';
+import '../brand.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../widgets.dart';
-
-/// Who sees what of [e], inner ring to outer: ACAPS, colleagues from the same
-/// country, colleagues elsewhere, the public.
-List<Audience> audiencesOf(Expert e) {
-  int exposure(String sees) => sees == e.realName && e.realName != null ? 2 : (sees == e.pseudonym ? 1 : 0);
-  Audience a(String who, String sees) => Audience(who, sees, exposure(sees));
-  // Short labels: they sit on curved rings.
-  return [
-    a('ACAPS', nameSeenBy(e, ViewerRole.moderator)),
-    a(e.homeCountry, nameSeenBy(e, ViewerRole.expert, sameCountry: true)),
-    a('Abroad', nameSeenBy(e, ViewerRole.expert)),
-    a('Public', nameSeenBy(e, ViewerRole.public)),
-  ];
-}
+import 'home.dart' show AwardIcon;
 
 class ProfileTab extends StatefulWidget {
   const ProfileTab({super.key});
@@ -108,57 +95,37 @@ class _ProfileTabState extends State<ProfileTab> {
         final a = me.level;
         final name = displayName(me, appState.viewer);
 
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(16, 18, 16, 32),
-          children: [
-            Row(
-              children: [
-                Avatar(name, size: 60, ring: true),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(name, style: t.headlineSmall),
-                      const SizedBox(height: 8),
-                      Wrap(spacing: 6, runSpacing: 6, children: [
-                        Pill('Level ${a.number}', icon: anonymityIcon(a), strong: true),
-                        Pill(me.homeCountry, icon: Icons.place_outlined),
-                      ]),
-                    ],
+        return BrandPage(
+          header: BrandHeader(
+            eyebrow: 'Your profile',
+            title: name,
+            seed: 41,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: AppColors.tealBright, width: 2)),
+                    padding: const EdgeInsets.all(2),
+                    child: Avatar(name, size: 52),
                   ),
-                ),
-              ],
-            ),
-
-            // Forecasts and comment feedback live in the My forecasts tab.
-
-            const SectionLabel('Who sees you'),
-            // How far your name travels: darker = more of you is visible.
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 16, 12, 10),
-                child: Column(
-                  children: [
-                    AnonymityRings(rings: audiencesOf(me)),
-                    const SizedBox(height: 8),
-                    Text('You are the blue dot. Rings: ACAPS, colleagues in ${me.homeCountry}, colleagues abroad, the public.',
-                        textAlign: TextAlign.center, style: t.bodySmall),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 14,
-                      runSpacing: 4,
-                      alignment: WrapAlignment.center,
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _Key(fill: cs.onSurface, label: 'real name'),
-                        _Key(fill: cs.onSurface.withAlpha(95), label: 'pseudonym'),
-                        _Key(fill: cs.surface, label: 'nothing about you', dashed: true),
+                        _HeaderFact(icon: anonymityIcon(a), text: 'Level ${a.number}: ${a.label}'),
+                        const SizedBox(height: 4),
+                        _HeaderFact(icon: Icons.place_outlined, text: me.homeCountry),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ),
+            ],
+          ),
+          children: [
+
+            // Forecasts and comment feedback live in the My forecasts tab.
 
             const SectionLabel('Anonymity level'),
             for (final opt in Anonymity.values)
@@ -169,6 +136,23 @@ class _ProfileTabState extends State<ProfileTab> {
                 selected: a == opt,
                 onTap: () => _changeLevel(opt),
               ),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Column(
+                  children: [
+                    _WhoRow(icon: Icons.verified_user_outlined, who: 'ACAPS moderators', sees: nameSeenBy(me, ViewerRole.moderator)),
+                    const Divider(),
+                    _WhoRow(icon: Icons.groups_2_outlined, who: 'Colleagues from ${me.homeCountry}', sees: nameSeenBy(me, ViewerRole.expert, sameCountry: true)),
+                    const Divider(),
+                    _WhoRow(icon: Icons.travel_explore, who: 'Colleagues from other countries', sees: nameSeenBy(me, ViewerRole.expert)),
+                    const Divider(),
+                    _WhoRow(icon: Icons.public, who: 'Public', sees: nameSeenBy(me, ViewerRole.public)),
+                  ],
+                ),
+              ),
+            ),
             const SizedBox(height: 8),
             if (a != Anonymity.anonymous)
               Card(
@@ -273,6 +257,22 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 }
 
+/// One white icon + text line in the navy profile header.
+class _HeaderFact extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _HeaderFact({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Icon(icon, size: 17, color: AppColors.tealBright),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: TextStyle(fontSize: 15, color: Colors.white.withAlpha(235)))),
+        ],
+      );
+}
+
 /// The expert's own permanent referral link: colleagues they trust can join
 /// the closed group with it. One link per expert, any number of colleagues.
 class _ReferralCard extends StatelessWidget {
@@ -302,20 +302,25 @@ class _ReferralCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Your referral link', style: t.titleSmall),
+            const Eyebrow('Grow the network'),
+            const SizedBox(height: 4),
+            Text('Your referral link', style: t.titleMedium),
             const SizedBox(height: 4),
             Text('Send it to experts you trust: they can join the group with it. '
                 'It is permanent and works for any number of colleagues.', style: t.bodySmall),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(border: Border.all(color: cs.onSurface, width: 1.5)),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest.withAlpha(140),
+                border: Border(left: BorderSide(color: cs.brightness == Brightness.light ? AppColors.teal : cs.primary, width: 3)),
+              ),
               child: Row(
                 children: [
-                  Icon(Icons.link, color: cs.onSurface),
+                  Icon(Icons.link, color: cs.brightness == Brightness.light ? AppColors.teal : cs.primary),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: SelectableText(link, style: mono(13, weight: FontWeight.w700, color: cs.onSurface, spacing: 0.2)),
+                    child: SelectableText(link, style: const TextStyle(fontFamily: 'monospace', fontSize: 13, fontWeight: FontWeight.w700)),
                   ),
                 ],
               ),
@@ -349,6 +354,23 @@ class _ReferralCard extends StatelessWidget {
             ),
             // Each colleague's progress: stage only, never who they are.
             for (var i = 0; i < progress.length; i++) _ReferralRow(number: i + 1, answered: progress[i].answered, stage: progress[i].stage),
+            const SizedBox(height: 12),
+            // Toward the Referral Master badge (shown in the Rating).
+            Row(
+              children: [
+                const AwardIcon(Award.referralMaster, size: 26),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    n >= referralMasterMin
+                        ? 'Referral Master: you invited $n experts who joined. The badge shows in the Rating.'
+                        : '${referralMasterMin - n} more ${referralMasterMin - n == 1 ? 'colleague' : 'colleagues'} '
+                            'to earn the Referral Master badge.',
+                    style: t.bodySmall,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 10),
             InfoBanner(
               icon: Icons.info_outline,
@@ -570,31 +592,6 @@ class _CountryPickerState extends State<_CountryPicker> {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// Legend swatch for the rings.
-class _Key extends StatelessWidget {
-  final Color fill;
-  final String label;
-  final bool dashed;
-  const _Key({required this.fill, required this.label, this.dashed = false});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 12,
-          height: 12,
-          decoration: BoxDecoration(color: fill, border: Border.all(color: cs.onSurface, width: dashed ? 1 : 0)),
-        ),
-        const SizedBox(width: 5),
-        Text(label, style: mono(11, color: cs.onSurfaceVariant, spacing: 0.3)),
-      ],
     );
   }
 }

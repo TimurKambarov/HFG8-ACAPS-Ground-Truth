@@ -6,10 +6,13 @@ import 'package:flutter/services.dart';
 
 import '../models.dart';
 import '../store.dart';
+import '../brand.dart';
 import '../download.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'home.dart';
+import 'risk_filter.dart';
+import 'import_risk.dart';
 import 'risk_form.dart';
 import 'survey.dart';
 
@@ -97,6 +100,27 @@ class _ModeratorShellState extends State<ModeratorShell> {
     _openRisk(r);
   }
 
+  /// Risks tab → "Import": pick a risk from the live ACAPS Risk Radar API,
+  /// review it in the prefilled form, publish (screens/import_risk.dart).
+  /// The screen returns the published risk; we confirm and open it, like
+  /// after "New risk".
+  Future<void> _importRisk() async {
+    final r = await Navigator.of(context).push<Risk>(MaterialPageRoute(builder: (_) => const ImportRiskScreen()));
+    if (r == null || !mounted) return;
+    final n = appState.panelForRisk(r).length;
+    final msg = r.isActive
+        ? '${r.id} imported from ACAPS and published to $n ${n == 1 ? 'expert' : 'experts'}'
+        : '${r.id} imported from ACAPS into the Archive';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    _openRisk(r);
+  }
+
+  /// Risks tab → "Sync statuses": compare the app with the live Risk Radar and
+  /// apply the Active / Archive changes the moderator ticks. The screen does
+  /// all the work itself and returns nothing.
+  Future<void> _syncStatuses() => Navigator.of(context)
+      .push<void>(MaterialPageRoute(builder: (_) => const ImportRiskScreen(mode: RadarMode.syncStatuses)));
+
   @override
   Widget build(BuildContext context) {
     final wide = _wide;
@@ -124,7 +148,7 @@ class _ModeratorShellState extends State<ModeratorShell> {
           index: _tab,
           children: [
             _InboxTab(onOpenReview: _openReview),
-            _RisksTab(filter: _filter, selectedId: _selectedRisk, onSelect: _openRisk, onReview: _openReview, onNewRisk: _newRisk),
+            _RisksTab(filter: _filter, selectedId: _selectedRisk, onSelect: _openRisk, onReview: _openReview, onNewRisk: _newRisk, onImportRisk: _importRisk, onSyncStatuses: _syncStatuses),
             _CommentsTab(
               selectedId: _reviewRisk,
               focusTrigger: _reviewTrigger,
@@ -137,13 +161,19 @@ class _ModeratorShellState extends State<ModeratorShell> {
           ],
         );
 
+        final plain = Theme.of(context).colorScheme.outlineVariant == Colors.white; // high contrast
         return Scaffold(
+          // Navy console bar with contour lines, like the website's navy bands.
           appBar: AppBar(
+            backgroundColor: plain ? Colors.black : (Theme.of(context).brightness == Brightness.light ? AppColors.navy : AppColors.navyNight),
+            foregroundColor: Colors.white,
+            shape: plain ? const Border(bottom: BorderSide(color: Colors.white, width: 2)) : const Border(),
+            flexibleSpace: TopoLines(color: Colors.white.withAlpha(26), seed: 17, scale: 120),
             title: const Row(
               children: [
-                Icon(Icons.admin_panel_settings_outlined),
-                SizedBox(width: 8),
-                Flexible(child: Text('ACAPS moderator', style: TextStyle(fontWeight: FontWeight.w800))),
+                PinMark(height: 24, color: AppColors.tealBright, dotColor: Colors.white),
+                SizedBox(width: 10),
+                Flexible(child: Text('ACAPS moderator', style: TextStyle(color: Colors.white))),
               ],
             ),
             actions: [
@@ -441,7 +471,7 @@ class _InviteSheetState extends State<_InviteSheet> {
           // that one person create a profile.
           Container(
             padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.zero),
+            decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(4)),
             child: Row(
               children: [
                 Icon(Icons.link, color: cs.primary),
@@ -570,7 +600,7 @@ class _CountPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.zero),
+        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
         child: Text(text,
             style: TextStyle(
                 color: ThemeData.estimateBrightnessForColor(color) == Brightness.dark ? Colors.white : Colors.black,
@@ -599,7 +629,7 @@ class _GapLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final up = gap > 0.25, down = gap < -0.25;
-    final color = up ? AppColors.high : (down ? AppColors.low : Theme.of(context).colorScheme.onSurfaceVariant);
+    final color = up ? readable(AppColors.red) : (down ? readable(AppColors.green) : Theme.of(context).colorScheme.onSurfaceVariant);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -646,102 +676,15 @@ class _SplitView extends StatelessWidget {
 // Risks: search + status on screen, everything else in a filter sheet
 // ===========================================================================
 
-enum RiskStatus { active, archive, all }
-
-enum RiskSort { toReview, changed, split, disagreement, gap, responseRate, level, id }
-
-extension RiskSortText on RiskSort {
-  String get label => switch (this) {
-        RiskSort.toReview => 'Most comments to review',
-        RiskSort.changed => 'Biggest change in expert view',
-        RiskSort.split => 'Experts most split',
-        RiskSort.disagreement => 'Most disagreement with ACAPS',
-        RiskSort.gap => 'Biggest forecast gap with ACAPS',
-        RiskSort.responseRate => 'Lowest response rate',
-        RiskSort.level => 'Highest risk level',
-        RiskSort.id => 'Risk ID',
-      };
-}
-
-class RiskFilter extends ChangeNotifier {
-  String query = '';
-  String? region;
-  String? country;
-  RiskStatus status = RiskStatus.active;
-  RiskSort sort = RiskSort.toReview;
-  bool onlyToReview = false;
-
-  /// Only risks where experts disagree among themselves (no clear group view).
-  bool onlySplit = false;
-  double minDisagreement = 0;
-
-  void update(void Function(RiskFilter f) f) {
-    f(this);
-    notifyListeners();
-  }
-
-  void clear() {
-    query = '';
-    clearSheet();
-    status = RiskStatus.active;
-  }
-
-  /// Resets what lives in the filter sheet (not search, not status).
-  void clearSheet() {
-    region = null;
-    country = null;
-    sort = RiskSort.toReview;
-    onlyToReview = false;
-    onlySplit = false;
-    minDisagreement = 0;
-  }
-
-  /// Filters set in the sheet (sort is not a filter).
-  int get sheetCount => (region == null ? 0 : 1) + (country == null ? 0 : 1) + (onlyToReview ? 1 : 0) + (onlySplit ? 1 : 0) + (minDisagreement > 0 ? 1 : 0);
-
-  List<(Risk, RiskModStats)> apply(List<Risk> risks) {
-    final q = query.toLowerCase();
-    final out = <(Risk, RiskModStats)>[];
-    for (final r in risks) {
-      if (status == RiskStatus.active && !r.isActive) continue;
-      if (status == RiskStatus.archive && !r.isResolved) continue;
-      if (status == RiskStatus.all && !r.isActive && !r.isResolved) continue;
-      final cs = AppState.riskCountries(r);
-      if (country != null && !cs.contains(country)) continue;
-      if (region != null && !cs.any((c) => regionOf(c) == region)) continue;
-      if (q.isNotEmpty && !'${r.id} ${r.title} ${r.country}'.toLowerCase().contains(q)) continue;
-      final s = appState.modStats(r);
-      if (onlyToReview && s.toReview == 0) continue;
-      if (onlySplit && !s.split) continue;
-      if (s.disagreement < minDisagreement) continue;
-      out.add((r, s));
-    }
-    int lvl(Risk r) => switch (r.level) { 'High' => 3, 'Medium' => 2, 'Low' => 1, _ => 0 };
-    out.sort((a, b) => switch (sort) {
-          RiskSort.toReview => b.$2.toReview != a.$2.toReview ? b.$2.toReview.compareTo(a.$2.toReview) : b.$2.comments.compareTo(a.$2.comments),
-          RiskSort.changed => b.$2.moved.abs() != a.$2.moved.abs()
-              ? b.$2.moved.abs().compareTo(a.$2.moved.abs())
-              : b.$2.changed.compareTo(a.$2.changed),
-          RiskSort.split => b.$2.spreadWidth != a.$2.spreadWidth
-              ? b.$2.spreadWidth.compareTo(a.$2.spreadWidth)
-              : b.$2.answered.compareTo(a.$2.answered),
-          RiskSort.disagreement => b.$2.disagreement.compareTo(a.$2.disagreement),
-          RiskSort.gap => (b.$2.gap?.abs() ?? -1).compareTo(a.$2.gap?.abs() ?? -1),
-          RiskSort.responseRate => a.$2.responseRate.compareTo(b.$2.responseRate),
-          RiskSort.level => lvl(b.$1).compareTo(lvl(a.$1)),
-          RiskSort.id => a.$1.id.compareTo(b.$1.id),
-        });
-    return out;
-  }
-}
-
 class _RisksTab extends StatelessWidget {
   final RiskFilter filter;
   final String? selectedId;
   final ValueChanged<Risk> onSelect;
   final OpenReview onReview;
   final VoidCallback onNewRisk;
-  const _RisksTab({required this.filter, required this.selectedId, required this.onSelect, required this.onReview, required this.onNewRisk});
+  final VoidCallback onImportRisk;
+  final VoidCallback onSyncStatuses;
+  const _RisksTab({required this.filter, required this.selectedId, required this.onSelect, required this.onReview, required this.onNewRisk, required this.onImportRisk, required this.onSyncStatuses});
 
   @override
   Widget build(BuildContext context) {
@@ -752,7 +695,7 @@ class _RisksTab extends StatelessWidget {
         return _SplitView(
           list: ListenableBuilder(
             listenable: filter,
-            builder: (context, _) => _RiskList(filter: filter, selectedId: split ? selectedId : null, onSelect: onSelect, onNewRisk: onNewRisk),
+            builder: (context, _) => _RiskList(filter: filter, selectedId: split ? selectedId : null, onSelect: onSelect, onNewRisk: onNewRisk, onImportRisk: onImportRisk, onSyncStatuses: onSyncStatuses),
           ),
           detail: selected == null ? null : ModRiskDetail(key: ValueKey(selected.id), risk: selected, onReview: onReview),
           emptyText: 'Pick a risk on the left.',
@@ -767,7 +710,9 @@ class _RiskList extends StatefulWidget {
   final String? selectedId;
   final ValueChanged<Risk> onSelect;
   final VoidCallback onNewRisk;
-  const _RiskList({required this.filter, required this.selectedId, required this.onSelect, required this.onNewRisk});
+  final VoidCallback onImportRisk;
+  final VoidCallback onSyncStatuses;
+  const _RiskList({required this.filter, required this.selectedId, required this.onSelect, required this.onNewRisk, required this.onImportRisk, required this.onSyncStatuses});
 
   @override
   State<_RiskList> createState() => _RiskListState();
@@ -792,24 +737,49 @@ class _RiskListState extends State<_RiskList> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
       children: [
-        Row(
-          children: [
-            Expanded(child: Text('Risks', style: t.headlineSmall)),
-            FilledButton.tonalIcon(
-              style: FilledButton.styleFrom(minimumSize: const Size(0, 40)),
-              onPressed: widget.onNewRisk,
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('New risk'),
-            ),
-          ],
-        ),
+        // Header: "Risks" + three actions. Two of them use the ACAPS API
+        // (Sync statuses, Import), the third is the manual New risk form.
+        // LayoutBuilder gives us the width of *this list* (not the screen),
+        // which matters in the desktop split view where the list is narrow.
+        LayoutBuilder(builder: (context, box) {
+          // A narrow list (phones, the split view) only has room for the icons.
+          final wide = box.maxWidth >= 560;
+          // Same button in two sizes: with a label when there is room, else an
+          // outlined icon; the tooltip says what it does in both cases.
+          Widget apiButton(String label, String tip, IconData icon, VoidCallback onTap) => wide
+              ? Tooltip(
+                  message: tip,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 40)),
+                    onPressed: onTap,
+                    icon: Icon(icon, size: 18),
+                    label: Text(label),
+                  ),
+                )
+              : IconButton.outlined(tooltip: tip, onPressed: onTap, icon: Icon(icon, size: 20));
+          return Row(
+            children: [
+              Expanded(child: Text('Risks', style: t.headlineSmall)),
+              apiButton('Sync statuses', 'Update Active / Archive status from the ACAPS Risk Radar API', Icons.sync, widget.onSyncStatuses),
+              const SizedBox(width: 8),
+              apiButton('Import', 'Import a new risk from the ACAPS Risk Radar API', Icons.cloud_download_outlined, widget.onImportRisk),
+              const SizedBox(width: 8),
+              FilledButton.tonalIcon(
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 40)),
+                onPressed: widget.onNewRisk,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('New risk'),
+              ),
+            ],
+          );
+        }),
         const SizedBox(height: 10),
         Row(
           children: [
             Expanded(
               child: TextField(
                 controller: _search,
-                decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search ID, title or country', isDense: true),
+                decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search ID, title, country or category', isDense: true),
                 onChanged: (v) => f.update((x) => x.query = v),
               ),
             ),
@@ -819,7 +789,7 @@ class _RiskListState extends State<_RiskList> {
               label: Text('$n'),
               child: IconButton.filledTonal(
                 tooltip: 'Filter and sort',
-                onPressed: () => _showRiskFilterSheet(context, f),
+                onPressed: () => showRiskFilterSheet(context, f),
                 icon: const Icon(Icons.tune),
               ),
             ),
@@ -856,102 +826,6 @@ class _RiskListState extends State<_RiskList> {
   }
 }
 
-void _showRiskFilterSheet(BuildContext context, RiskFilter f) {
-  showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (context) => ListenableBuilder(
-      listenable: f,
-      builder: (context, _) {
-        final t = Theme.of(context).textTheme;
-        final countries = (f.region == null ? appState.countries : appState.countries.where((c) => regionOf(c) == f.region)).toList();
-        return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(child: Text('Filter and sort', style: t.titleLarge)),
-                  TextButton(onPressed: () => f.update((x) => x.clearSheet()), child: const Text('Reset')),
-                ],
-              ),
-              const SectionLabel('Sort'),
-              DropdownMenu<RiskSort>(
-                key: ValueKey('sort-${f.sort}'),
-                expandedInsets: EdgeInsets.zero,
-                initialSelection: f.sort,
-                leadingIcon: const Icon(Icons.sort),
-                dropdownMenuEntries: [for (final s in RiskSort.values) DropdownMenuEntry(value: s, label: s.label)],
-                onSelected: (v) {
-                  if (v != null) f.update((x) => x.sort = v);
-                },
-              ),
-              const SectionLabel('Where'),
-              DropdownMenu<String?>(
-                key: ValueKey('region-${f.region}'),
-                expandedInsets: EdgeInsets.zero,
-                initialSelection: f.region,
-                label: const Text('Region'),
-                dropdownMenuEntries: [
-                  const DropdownMenuEntry(value: null, label: 'All regions'),
-                  for (final r in regions.keys) DropdownMenuEntry(value: r, label: r),
-                ],
-                onSelected: (v) => f.update((x) {
-                  x.region = v;
-                  if (v != null && x.country != null && regionOf(x.country!) != v) x.country = null;
-                }),
-              ),
-              const SizedBox(height: 10),
-              DropdownMenu<String?>(
-                key: ValueKey('country-${f.country}-${f.region}'),
-                expandedInsets: EdgeInsets.zero,
-                initialSelection: f.country,
-                menuHeight: 320,
-                label: const Text('Country'),
-                dropdownMenuEntries: [
-                  const DropdownMenuEntry(value: null, label: 'All countries'),
-                  for (final c in countries) DropdownMenuEntry(value: c, label: c),
-                ],
-                onSelected: (v) => f.update((x) => x.country = v),
-              ),
-              const SectionLabel('Show only'),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: f.onlyToReview,
-                onChanged: (v) => f.update((x) => x.onlyToReview = v),
-                title: const Text('Risks with comments to review'),
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: f.onlySplit,
-                onChanged: (v) => f.update((x) => x.onlySplit = v),
-                title: const Text('Risks where experts are split'),
-                subtitle: const Text('No clear group view: this part of the analysis may need attention.'),
-              ),
-              Row(
-                children: [
-                  Expanded(child: Text('Disagreement with ACAPS at least', style: t.bodyMedium)),
-                  Text('${(f.minDisagreement * 100).round()}%', style: const TextStyle(fontWeight: FontWeight.w800)),
-                ],
-              ),
-              Slider(
-                value: f.minDisagreement,
-                divisions: 20,
-                label: '${(f.minDisagreement * 100).round()}%',
-                onChanged: (v) => f.update((x) => x.minDisagreement = v),
-              ),
-              const SizedBox(height: 8),
-              FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
-            ],
-          ),
-        );
-      },
-    ),
-  );
-}
-
 /// "Experts split": the panel disagrees among itself on the forecast.
 class _SplitPill extends StatelessWidget {
   const _SplitPill();
@@ -959,17 +833,18 @@ class _SplitPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = agreementColors[Agreement.partly]!;
+    final fg = readable(c);
     return Tooltip(
       message: 'Experts disagree among themselves: no clear group view. This part of the analysis may need attention.',
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        decoration: BoxDecoration(color: c.withAlpha(40), borderRadius: BorderRadius.zero, border: Border.all(color: c)),
+        decoration: BoxDecoration(color: c.withAlpha(40), borderRadius: BorderRadius.circular(4), border: Border.all(color: c)),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.call_split, size: 13, color: c),
+            Icon(Icons.call_split, size: 13, color: fg),
             const SizedBox(width: 3),
-            Text('experts split', style: TextStyle(color: c, fontSize: 11.5, fontWeight: FontWeight.w800)),
+            Text('experts split', style: TextStyle(color: fg, fontSize: 11.5, fontWeight: FontWeight.w800)),
           ],
         ),
       ),
@@ -999,7 +874,7 @@ class _ModRiskTile extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 5),
       color: selected ? cs.primary.withAlpha(28) : null,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
+        borderRadius: BorderRadius.circular(4),
         side: BorderSide(color: selected ? cs.primary : cs.outlineVariant, width: selected ? 2 : 1),
       ),
       clipBehavior: Clip.antiAlias,
@@ -1012,17 +887,14 @@ class _ModRiskTile extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Expanded(
-                    child: Text('${risk.id} · ${risk.country}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: cs.onSurfaceVariant)),
-                  ),
+                  Expanded(child: Eyebrow('${risk.id} · ${risk.country}')),
                   LevelBadge(risk.level),
                 ],
               ),
               const SizedBox(height: 6),
               Text(risk.oneLiner, maxLines: 2, overflow: TextOverflow.ellipsis, style: t.titleSmall),
+              const SizedBox(height: 6),
+              CategoryChips(risk, compact: true, maxNeeds: 2),
               const SizedBox(height: 6),
               Row(
                 children: [
@@ -1111,7 +983,7 @@ class ModRiskDetail extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
                   decoration: BoxDecoration(
                     color: cs.error.withAlpha(20),
-                    borderRadius: BorderRadius.zero,
+                    borderRadius: BorderRadius.circular(4),
                     border: Border.all(color: cs.error.withAlpha(90)),
                   ),
                   child: Row(
@@ -1135,6 +1007,7 @@ class ModRiskDetail extends StatelessWidget {
                 children: [
                   _Fact('Risk ID', r.id),
                   _Fact('Type', r.type.isEmpty ? '-' : r.type),
+                  _Fact('Expected exposure', r.exposureIdx == null ? '-' : '${r.exposure} people'),
                   _Fact('Status', r.status.isEmpty ? '-' : r.status),
                   _Fact('Countries', r.country),
                   _Fact('Probability', p == null ? 'Unrated' : levelLabels[p]),
@@ -1143,6 +1016,13 @@ class ModRiskDetail extends StatelessWidget {
                   if (r.trend.isNotEmpty) _Fact('Trend', r.trend),
                 ],
               ),
+              if (r.needList.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text('EXPECTED PRIORITY NEEDS',
+                    style: TextStyle(fontSize: 10.5, letterSpacing: 0.8, fontWeight: FontWeight.w800, color: cs.onSurfaceVariant)),
+                const SizedBox(height: 6),
+                Wrap(spacing: 6, runSpacing: 6, children: [for (final n in r.needList) Pill(n, icon: Icons.sell_outlined)]),
+              ],
 
               const SectionLabel('Expert answers'),
               Card(
@@ -1211,8 +1091,6 @@ class ModRiskDetail extends StatelessWidget {
 
               const SectionLabel('Analysis'),
               _TextSection(title: 'Rationale', text: r.rationale, initiallyExpanded: true),
-              _TextSection(title: 'Expected exposure', text: r.exposure),
-              _TextSection(title: 'Expected priority needs', text: r.needs),
               _TextSection(title: r.isResolved ? 'What happened' : 'If it materialises', text: r.materialisation),
             ],
           ),
@@ -1253,7 +1131,7 @@ class _Fact extends StatelessWidget {
     return Container(
       constraints: const BoxConstraints(minWidth: 120, maxWidth: 360),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.zero),
+      decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(4)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -1284,7 +1162,7 @@ class _CompletionBar extends StatelessWidget {
         children: [
           Expanded(
             child: ClipRRect(
-              borderRadius: BorderRadius.zero,
+              borderRadius: BorderRadius.circular(4),
               child: LinearProgressIndicator(
                 value: completion / 100,
                 minHeight: 7,
@@ -1523,7 +1401,7 @@ class _ReviewListState extends State<_ReviewList> {
     final q = _q.toLowerCase();
     final fresh = _ReviewList.risksWithComments(onlyNew: true);
     final all = _ReviewList.risksWithComments(onlyNew: false);
-    final rows = (_onlyNew ? fresh : all).where((x) => q.isEmpty || '${x.$1.id} ${x.$1.title} ${x.$1.country}'.toLowerCase().contains(q));
+    final rows = (_onlyNew ? fresh : all).where((x) => q.isEmpty || x.$1.searchText.contains(q));
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
       children: [
@@ -1533,7 +1411,7 @@ class _ReviewListState extends State<_ReviewList> {
         const SizedBox(height: 14),
         const _ScopeLabel(Icons.filter_list, 'Which risks to list'),
         TextField(
-          decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search risks by ID, title or country', isDense: true),
+          decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'Search risks by ID, title, country or category', isDense: true),
           onChanged: (v) => setState(() => _q = v),
         ),
         const SizedBox(height: 8),
@@ -1559,7 +1437,7 @@ class _ReviewListState extends State<_ReviewList> {
             margin: const EdgeInsets.symmetric(vertical: 4),
             color: r.id == widget.selectedId ? cs.primary.withAlpha(28) : null,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.zero,
+              borderRadius: BorderRadius.circular(4),
               side: BorderSide(color: r.id == widget.selectedId ? cs.primary : cs.outlineVariant, width: r.id == widget.selectedId ? 2 : 1),
             ),
             child: ListTile(
@@ -1652,7 +1530,7 @@ class _ModRiskReviewState extends State<ModRiskReview> {
           padding: const EdgeInsets.fromLTRB(14, 12, 8, 8),
           decoration: BoxDecoration(
             color: levelColor(r.level).withAlpha(Theme.of(context).brightness == Brightness.dark ? 45 : 26),
-            borderRadius: BorderRadius.zero,
+            borderRadius: BorderRadius.circular(4),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1702,7 +1580,7 @@ class _ModRiskReviewState extends State<ModRiskReview> {
             padding: const EdgeInsets.symmetric(horizontal: 8),
             decoration: BoxDecoration(
               color: items[i].id == widget.focusTrigger ? cs.primary.withAlpha(22) : null,
-              borderRadius: BorderRadius.zero,
+              borderRadius: BorderRadius.circular(4),
             ),
             child: QuestionHeader(number: i + 1, total: items.length, title: items[i].title),
           ),
@@ -1835,7 +1713,7 @@ class _ModComment extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: cs.surfaceContainerLowest,
-        borderRadius: BorderRadius.zero,
+        borderRadius: BorderRadius.circular(4),
         border: Border.all(color: pending ? cs.primary.withAlpha(180) : cs.outlineVariant, width: pending ? 1.5 : 1),
       ),
       child: Column(
@@ -1855,6 +1733,8 @@ class _ModComment extends StatelessWidget {
                 Text('NEW', style: TextStyle(color: cs.primary, fontWeight: FontWeight.w900, fontSize: 11, letterSpacing: 1)),
             ],
           ),
+          // How far to trust the author: how they got in, and what they do.
+          if (author != null) ...[const SizedBox(height: 6), TrustPills(author)],
           const SizedBox(height: 8),
           Text(c.text, style: const TextStyle(height: 1.4)),
           const SizedBox(height: 8),
@@ -2063,7 +1943,7 @@ class _PublishSheetState extends State<_PublishSheet> {
           if (_credits && n >= minPanel)
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(120), borderRadius: BorderRadius.zero),
+              decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(120), borderRadius: BorderRadius.circular(4)),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2146,6 +2026,41 @@ class _GroupForecast extends StatelessWidget {
 // Experts: one directory, sortable by rating
 // ===========================================================================
 
+/// The two trust signals moderators see for an expert: how they got in (an
+/// ACAPS invite or an expert's referral) and what they do in the app.
+/// Neither says who they are; colleagues and the expert never see this.
+class TrustPills extends StatelessWidget {
+  final Expert expert;
+  const TrustPills(this.expert, {super.key});
+
+  static IconData joinIcon(JoinedVia j) =>
+      j == JoinedVia.acapsInvite ? Icons.verified_user_outlined : Icons.handshake_outlined;
+
+  static IconData activityIcon(Activity a) => switch (a) {
+        Activity.newcomer => Icons.fiber_new_outlined,
+        Activity.active => Icons.bolt,
+        Activity.established => Icons.workspace_premium_outlined,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final a = appState.expertActivity(expert);
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: [
+        Tooltip(
+          message: expert.joinedVia == JoinedVia.acapsInvite
+              ? 'Joined with a single-use invite link from an ACAPS moderator'
+              : 'Joined with the referral link of an expert already in the group',
+          child: Pill(expert.joinedVia.label, icon: joinIcon(expert.joinedVia)),
+        ),
+        Tooltip(message: a.why, child: Pill(a.label, icon: activityIcon(a))),
+      ],
+    );
+  }
+}
+
 enum _ExpertSort { points, accuracy, answers, name }
 
 extension on _ExpertSort {
@@ -2169,6 +2084,9 @@ class _ExpertsTabState extends State<_ExpertsTab> {
   String? _country;
   _ExpertSort _sort = _ExpertSort.points;
 
+  /// Filter by how experts joined (null = everyone).
+  JoinedVia? _joined;
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(listenable: appState, builder: (context, _) => _build(context));
 
@@ -2178,6 +2096,7 @@ class _ExpertsTabState extends State<_ExpertsTab> {
     final q = _q.toLowerCase();
     final rows = appState.experts
         .where((e) => _country == null || e.inPanel(_country!))
+        .where((e) => _joined == null || e.joinedVia == _joined)
         .where((e) => q.isEmpty || '${displayName(e, Viewer.moderator)} ${e.pseudonym} ${e.homeCountry}'.toLowerCase().contains(q))
         .map((e) => (e, appState.statsOf(e), appState.responsesOf(e).length))
         .toList()
@@ -2241,6 +2160,22 @@ class _ExpertsTabState extends State<_ExpertsTab> {
             ),
           ],
         ),
+        const SizedBox(height: 10),
+        // The door check: how experts got in (moderators only).
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: [
+            ChoiceChip(label: const Text('Everyone'), selected: _joined == null, onSelected: (_) => setState(() => _joined = null)),
+            for (final j in JoinedVia.values)
+              ChoiceChip(
+                avatar: Icon(TrustPills.joinIcon(j), size: 16),
+                label: Text(j.label),
+                selected: _joined == j,
+                onSelected: (_) => setState(() => _joined = _joined == j ? null : j),
+              ),
+          ],
+        ),
         // Panel size for the chosen country. Invites: the link button in the top bar.
         if (_country != null)
           Padding(
@@ -2265,8 +2200,15 @@ class _ExpertsTabState extends State<_ExpertsTab> {
             child: ListTile(
               leading: Avatar(displayName(e, Viewer.moderator), size: 36),
               title: Text(displayName(e, Viewer.moderator)),
-              subtitle: Text('L${e.level.number} · ${e.countries.join(', ')} · $answers answers'
-                  '${st.brier == null ? '' : ' · accuracy ${accuracyPct(st.brier!)}%'}'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('L${e.level.number} · ${e.countries.join(', ')} · $answers answers'
+                      '${st.brier == null ? '' : ' · accuracy ${accuracyPct(st.brier!)}%'}'),
+                  const SizedBox(height: 4),
+                  TrustPills(e),
+                ],
+              ),
               trailing: Text('${st.points}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
               onTap: () => _showExpert(context, e),
             ),
@@ -2307,6 +2249,15 @@ void _showExpert(BuildContext context, Expert e) {
                 ),
               ],
             ),
+            const SectionLabel('Trust', padding: EdgeInsets.only(top: 16, bottom: 6)),
+            TrustPills(e),
+            const SizedBox(height: 4),
+            Text(
+              '${e.joinedVia == JoinedVia.acapsInvite ? 'Joined with a single-use invite link from an ACAPS moderator.' : 'Joined with the referral link of an expert already in the group.'} '
+              '${appState.expertActivity(e).why}. '
+              'Neither says who they are; only moderators see this.',
+              style: t.bodySmall,
+            ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 6,
@@ -2337,7 +2288,7 @@ void _showExpert(BuildContext context, Expert e) {
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: cs.surfaceContainerHighest, borderRadius: BorderRadius.zero),
+              decoration: BoxDecoration(color: cs.surfaceContainerHighest, borderRadius: BorderRadius.circular(4)),
               child: SelectableText(
                 const JsonEncoder.withIndent('  ').convert(e.toJson()),
                 style: const TextStyle(fontFamily: 'monospace', fontSize: 12, height: 1.35),

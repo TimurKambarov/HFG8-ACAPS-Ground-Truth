@@ -1,245 +1,356 @@
-// =============================================================================
-// Design system: "field instrument"
-// =============================================================================
-//
-// Three rules give the app its look:
-//
-//   1. The interface is monochrome: paper and ink. Colour is reserved for
-//      DATA, so whatever is coloured means something.
-//   2. ACAPS's probability scale is a heat ramp, from pale sand (very low)
-//      to oxblood (very high). Lightness rises with the step, so it still
-//      reads in greyscale and for colour-blind readers.
-//   3. People are dots, never faces or names. Other experts are grey dots;
-//      YOU are the blue dot, like "you are here" on a map; ACAPS is an ink
-//      square. The same three marks appear on every chart.
-//
-// Type: Atkinson Hyperlegible, designed by the Braille Institute for readers
-// with low vision. Next for text, Mono for numbers, IDs and labels. Both are
-// bundled (assets/fonts), so the app needs no font download in the field.
-// Corners are square; buttons are solid ink slabs.
-// =============================================================================
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-/// Font families bundled in assets/fonts (see pubspec.yaml).
-const fontText = 'AtkinsonNext';
-const fontMono = 'AtkinsonMono';
+import 'store.dart';
+
+// ACAPS visual identity, taken from the acaps.org stylesheet.
+//
+// - Colours: the site's Bootstrap palette. Navy #004B78 for buttons, links and
+//   big blocks; teal #0096BA for underlines, card edges and the active nav
+//   item; sand #F4A261 and gold #E9C46A as warm accents; light-grey bands
+//   (#F2F2F2) behind white cards.
+// - Type: Bebas Neue (all-caps headings) and Roboto Condensed (everything
+//   else), bundled as small Latin subsets in assets/fonts.
+// - Shapes: mostly square edges with small radii, a short teal bar under
+//   headings, a coloured left edge on feed cards. Decorative motifs
+//   (topographic lines, the map pin) are drawn in code: see brand.dart.
+//
+// Low bandwidth: no images, no web fonts. Everything is colour, lines and
+// two bundled fonts.
+//
+// Public names (AppColors.*, scaleColors, severityColors, levelColor,
+// readable, onColor, buildTheme, buildContrastTheme) are used by the screens.
+
+const fontDisplay = 'BebasNeue';
+const fontBody = 'RobotoCondensed';
+
+/// Glyphs missing from the Latin subsets (arrows) come from this tiny font.
+const fontFallback = ['Arrows'];
 
 class AppColors {
-  // --- Light: paper and ink ---
-  static const paper = Color(0xFFEFEFEA); // background: cool stone, not cream
-  static const sheet = Color(0xFFFAFAF7); // cards and sheets
-  static const ink = Color(0xFF111315); // text, slabs, rules
-  static const inkSoft = Color(0xFF51575D); // secondary text (6.4:1 on paper)
-  static const rule = Color(0xFFD2D3CC); // hairlines and empty tracks
-  static const you = Color(0xFF2B5BFF); // the signed-in expert, everywhere
+  // --- acaps.org palette --------------------------------------------------
+  /// --bs-primary: buttons, links, navy bands.
+  static const navy = Color(0xFF004B78);
 
-  // --- Dark: night ---
-  static const night = Color(0xFF0C0E10);
-  static const nightSheet = Color(0xFF16191C);
-  static const nightInk = Color(0xFFEFEFE9);
-  static const nightSoft = Color(0xFFA3A9AE);
-  static const nightRule = Color(0xFF2B3035);
-  static const youNight = Color(0xFF7D96FF);
+  /// Link hover / pressed navy.
+  static const navyDeep = Color(0xFF003C60);
 
-  // --- Data: risk level and the direction of a gap ---
-  static const high = Color(0xFFC8402B); // = heat step 4
-  static const medium = Color(0xFFE57A32); // = heat step 3
-  static const low = Color(0xFF3E7C8F); // experts lower than ACAPS: a cool slate
+  /// Darker navy for headers in the dark theme.
+  static const navyNight = Color(0xFF032B45);
 
-  /// Kept for older call sites: the brand "primary" is ink.
-  static const primary = ink;
+  /// --bs-secondary: heading bars, card edges, the active nav underline.
+  /// Decoration only: as small text on white it is below 4.5:1.
+  static const teal = Color(0xFF0096BA);
+
+  /// Teal dark enough for small text on white (4.9:1).
+  static const tealText = Color(0xFF007A99);
+
+  /// Teal for dark backgrounds.
+  static const tealBright = Color(0xFF3DB8D8);
+
+  /// --bs-tertiary and --bs-quaternary: warm accents.
+  static const sand = Color(0xFFF4A261);
+  static const gold = Color(0xFFE9C46A);
+
+  /// --bs-success / --bs-danger / --bs-warning.
+  static const green = Color(0xFF5C9B53);
+  static const red = Color(0xFFD43D3D);
+  static const amber = Color(0xFFF0AD4E);
+
+  /// Body text (#131415 on the site).
+  static const ink = Color(0xFF131415);
+
+  /// Footer greys.
+  static const graphite = Color(0xFF313131);
+  static const charcoal = Color(0xFF212121);
+
+  /// Light-grey page band and hairlines.
+  static const mist = Color(0xFFF2F2F2);
+  static const line = Color(0xFFDEDEDE);
+
+  // --- Names used by the screens -----------------------------------------
+  static const primary = navy;
+  static const paperDark = Color(0xFF15181B);
+  static const cardDark = Color(0xFF1F2327);
+
+  /// Risk levels as solid tags: red / sand / gold, like a map legend.
+  static const high = red;
+  static const medium = sand;
+  static const low = gold;
 }
 
-/// ACAPS probability scale as a heat ramp: very low -> very high.
-/// Lightness falls step by step, so the order survives greyscale.
-const scaleColors = [
-  Color(0xFFE8D7B0), // 1 very low  <10%   pale sand
-  Color(0xFFF0B445), // 2 low       10-33% amber
-  Color(0xFFE57A32), // 3 medium    34-66% orange
-  Color(0xFFC8402B), // 4 high      67-90% vermilion
-  Color(0xFF8E1F33), // 5 very high >90%   oxblood
+/// The INFORM Severity scale colours used on acaps.org (very low -> very high).
+const informSeverity = [
+  Color(0xFFE4C7E4),
+  Color(0xFFD17EBD),
+  Color(0xFF80558B),
+  Color(0xFF47155A),
+  Color(0xFF1B0622),
 ];
 
-/// Text colour that reads on a heat step.
-Color onScale(int step) => step >= 4 ? Colors.white : AppColors.ink;
+bool get _darkInUse => switch (appState.theme) {
+      AppTheme.light => false,
+      AppTheme.dark || AppTheme.contrast => true,
+      AppTheme.system => ui.PlatformDispatcher.instance.platformBrightness == Brightness.dark,
+    };
 
+/// ACAPS probability scale, very low -> very high: light teal to navy (dark
+/// teal to bright teal in dark themes, so "very high" always stands out).
+List<Color> get scaleColors => _darkInUse
+    ? const [Color(0xFF1C5568), Color(0xFF1B7A96), Color(0xFF1FA0C2), Color(0xFF5CC8E6), Color(0xFFB0E6F4)]
+    : const [Color(0xFF9DD6E6), Color(0xFF4DB5D2), Color(0xFF0096BA), Color(0xFF00668F), AppColors.navy];
+
+/// "How bad would it be", 1 -> 5: the INFORM severity purples.
+List<Color> get severityColors => _darkInUse
+    ? const [Color(0xFF4A2D57), Color(0xFF6E3F80), Color(0xFF9A62AB), Color(0xFFD17EBD), Color(0xFFE4C7E4)]
+    : informSeverity;
+
+/// Fill colour of a risk level tag.
 Color levelColor(String level) => switch (level) {
       'High' => AppColors.high,
       'Medium' => AppColors.medium,
-      'Low' => scaleColors[1],
-      _ => const Color(0xFF8A8F94),
+      'Low' => AppColors.low,
+      _ => _darkInUse ? const Color(0xFF59626A) : const Color(0xFFABABAB),
     };
 
-/// The signed-in expert's colour: the blue "you are here" dot.
-Color youColor(BuildContext context) => Theme.of(context).colorScheme.secondary;
+/// Text colour on top of [c]: white on dark fills, ink on light ones.
+Color onColor(Color c) =>
+    ThemeData.estimateBrightnessForColor(c) == Brightness.dark ? Colors.white : AppColors.ink;
 
-/// Monospaced label style (IDs, numbers, eyebrows).
-TextStyle mono(double size, {FontWeight weight = FontWeight.w500, Color? color, double spacing = 0.6}) =>
-    TextStyle(fontFamily: fontMono, fontSize: size, fontWeight: weight, color: color, letterSpacing: spacing, height: 1.25);
+/// [c] adjusted until it reads as text on the current background (4.5:1):
+/// darker on light themes, lighter on dark ones. Hue stays the same.
+Color readable(Color c) {
+  final dark = _darkInUse;
+  final bg = dark ? AppColors.cardDark : Colors.white;
+  double contrast(Color a) {
+    final la = a.computeLuminance(), lb = bg.computeLuminance();
+    return (la > lb ? la + 0.05 : lb + 0.05) / (la > lb ? lb + 0.05 : la + 0.05);
+  }
 
-/// High contrast: black, white, and a yellow "you".
-ThemeData buildContrastTheme() {
-  const scheme = ColorScheme(
-    brightness: Brightness.dark,
-    primary: Colors.white,
-    onPrimary: Colors.black,
-    secondary: Color(0xFFFFE14D),
-    onSecondary: Colors.black,
-    secondaryContainer: Color(0xFF2A2A2A),
-    onSecondaryContainer: Colors.white,
-    tertiary: Color(0xFFFFE14D),
-    onTertiary: Colors.black,
-    error: Color(0xFFFF6B5B),
-    onError: Colors.black,
-    errorContainer: Color(0xFF5A0000),
-    onErrorContainer: Colors.white,
-    surface: Colors.black,
-    onSurface: Colors.white,
-    onSurfaceVariant: Colors.white,
-    surfaceContainerLowest: Colors.black,
-    surfaceContainerLow: Color(0xFF0A0A0A),
-    surfaceContainer: Color(0xFF141414),
-    surfaceContainerHigh: Color(0xFF1E1E1E),
-    surfaceContainerHighest: Color(0xFF2A2A2A),
-    outline: Colors.white,
-    outlineVariant: Colors.white,
-    inverseSurface: Colors.white,
-    onInverseSurface: Colors.black,
-    inversePrimary: Colors.black,
-  );
-  return _themeFrom(scheme, borderWidth: 2, navBg: Colors.black);
+  var hsl = HSLColor.fromColor(c);
+  var out = c;
+  for (var i = 0; i < 20 && contrast(out) < 4.6; i++) {
+    final l = (hsl.lightness + (dark ? 0.04 : -0.04)).clamp(0.0, 1.0);
+    hsl = hsl.withLightness(l);
+    out = hsl.toColor();
+  }
+  return out;
 }
 
 ThemeData buildTheme(Brightness brightness) {
   final dark = brightness == Brightness.dark;
-  final scheme = ColorScheme(
-    brightness: brightness,
-    // Ink is the brand: buttons, rules, icons. No coloured primary.
-    primary: dark ? AppColors.nightInk : AppColors.ink,
-    onPrimary: dark ? AppColors.night : AppColors.paper,
-    primaryContainer: dark ? AppColors.nightRule : AppColors.rule,
-    onPrimaryContainer: dark ? AppColors.nightInk : AppColors.ink,
-    // "You": the one colour that is not data. Tonal buttons and other
-    // "secondary containers" stay neutral, so blue only ever means you.
-    secondary: dark ? AppColors.youNight : AppColors.you,
-    onSecondary: dark ? AppColors.night : Colors.white,
-    secondaryContainer: dark ? AppColors.nightRule : AppColors.rule,
-    onSecondaryContainer: dark ? AppColors.nightInk : AppColors.ink,
-    tertiaryContainer: dark ? AppColors.nightRule : AppColors.rule,
-    onTertiaryContainer: dark ? AppColors.nightInk : AppColors.ink,
-    tertiary: dark ? AppColors.nightInk : AppColors.ink,
-    onTertiary: dark ? AppColors.night : AppColors.paper,
-    error: dark ? const Color(0xFFE8604A) : AppColors.high,
-    onError: Colors.white,
-    errorContainer: dark ? const Color(0xFF3A1610) : const Color(0xFFF5DDD6),
-    onErrorContainer: dark ? const Color(0xFFFFD9D0) : const Color(0xFF5A140B),
-    surface: dark ? AppColors.night : AppColors.paper,
-    onSurface: dark ? AppColors.nightInk : AppColors.ink,
-    onSurfaceVariant: dark ? AppColors.nightSoft : AppColors.inkSoft,
-    surfaceContainerLowest: dark ? AppColors.nightSheet : AppColors.sheet,
-    surfaceContainerLow: dark ? AppColors.nightSheet : AppColors.sheet,
-    surfaceContainer: dark ? const Color(0xFF1C2024) : const Color(0xFFE7E7E1),
-    surfaceContainerHigh: dark ? const Color(0xFF22272B) : const Color(0xFFE2E2DB),
-    surfaceContainerHighest: dark ? const Color(0xFF292E33) : const Color(0xFFDADAD3),
-    outline: dark ? AppColors.nightInk : AppColors.ink,
-    outlineVariant: dark ? AppColors.nightRule : AppColors.rule,
-    inverseSurface: dark ? AppColors.nightInk : AppColors.ink,
-    onInverseSurface: dark ? AppColors.night : AppColors.paper,
-    inversePrimary: dark ? AppColors.night : AppColors.paper,
-  );
-  return _themeFrom(scheme, navBg: dark ? const Color(0xFF050607) : AppColors.ink);
+  return _themeFrom(dark ? _darkScheme : _lightScheme);
 }
 
-ThemeData _themeFrom(ColorScheme scheme, {double borderWidth = 1.5, required Color navBg}) {
-  final base = ThemeData(colorScheme: scheme, useMaterial3: true, fontFamily: fontText);
-  final ink = scheme.onSurface;
-  final soft = scheme.onSurfaceVariant;
-  final paper = scheme.surface;
-  const square = RoundedRectangleBorder();
-  final heavy = BorderSide(color: ink, width: 2);
-  final text = base.textTheme;
-  // Navigation sits on an ink (or black) bar in every theme.
-  const navInk = Color(0xFFEFEFE9);
+/// High contrast: black background, white text, ACAPS teal and gold
+/// brightened, 2px outlines everywhere, no decorative patterns.
+ThemeData buildContrastTheme() => _themeFrom(_contrastScheme, borderWidth: 2);
 
-  TextStyle? t(TextStyle? s, double size, FontWeight w, {double spacing = 0, double height = 1.2, Color? color}) =>
-      s?.copyWith(fontSize: size, fontWeight: w, letterSpacing: spacing, height: height, color: color ?? ink);
+const _lightScheme = ColorScheme(
+  brightness: Brightness.light,
+  primary: AppColors.navy,
+  onPrimary: Colors.white,
+  primaryContainer: Color(0xFFDCEFF5),
+  onPrimaryContainer: AppColors.navyNight,
+  secondary: AppColors.tealText,
+  onSecondary: Colors.white,
+  secondaryContainer: Color(0xFFDCEFF5),
+  onSecondaryContainer: AppColors.navyNight,
+  tertiary: Color(0xFFA0592A),
+  onTertiary: Colors.white,
+  tertiaryContainer: Color(0xFFFCE9DA),
+  onTertiaryContainer: Color(0xFF4A2508),
+  error: AppColors.red,
+  onError: Colors.white,
+  errorContainer: Color(0xFFFBE3E3),
+  onErrorContainer: Color(0xFF7F2525),
+  surface: AppColors.mist,
+  onSurface: AppColors.ink,
+  onSurfaceVariant: Color(0xFF5C6166),
+  surfaceContainerLowest: Colors.white,
+  surfaceContainerLow: Colors.white,
+  surfaceContainer: Colors.white,
+  surfaceContainerHigh: Colors.white,
+  surfaceContainerHighest: Color(0xFFE9E9E9),
+  outline: Color(0xFFABABAB),
+  outlineVariant: AppColors.line,
+  inverseSurface: AppColors.navy,
+  onInverseSurface: Colors.white,
+  inversePrimary: AppColors.tealBright,
+  shadow: Colors.black,
+  scrim: Colors.black,
+  surfaceTint: Colors.transparent,
+);
+
+const _darkScheme = ColorScheme(
+  brightness: Brightness.dark,
+  primary: AppColors.tealBright,
+  onPrimary: Color(0xFF00202E),
+  primaryContainer: Color(0xFF00405F),
+  onPrimaryContainer: Color(0xFFCDEFF8),
+  secondary: Color(0xFF7FC8DE),
+  onSecondary: Color(0xFF00202E),
+  secondaryContainer: Color(0xFF0E3A52),
+  onSecondaryContainer: Color(0xFFCDEFF8),
+  tertiary: AppColors.sand,
+  onTertiary: Color(0xFF2B1600),
+  tertiaryContainer: Color(0xFF4A2A10),
+  onTertiaryContainer: Color(0xFFFFDDC4),
+  error: Color(0xFFF28B82),
+  onError: Color(0xFF3D0B0B),
+  errorContainer: Color(0xFF5C1A1A),
+  onErrorContainer: Color(0xFFFFDAD6),
+  surface: AppColors.paperDark,
+  onSurface: Color(0xFFE8EAEC),
+  onSurfaceVariant: Color(0xFFA9B0B6),
+  surfaceContainerLowest: AppColors.cardDark,
+  surfaceContainerLow: AppColors.cardDark,
+  surfaceContainer: Color(0xFF23282C),
+  surfaceContainerHigh: Color(0xFF2A2F34),
+  surfaceContainerHighest: Color(0xFF353B41),
+  outline: Color(0xFF6E777F),
+  outlineVariant: Color(0xFF343A40),
+  inverseSurface: Color(0xFFE8EAEC),
+  onInverseSurface: AppColors.paperDark,
+  inversePrimary: AppColors.navy,
+  shadow: Colors.black,
+  scrim: Colors.black,
+  surfaceTint: Colors.transparent,
+);
+
+const _contrastScheme = ColorScheme(
+  brightness: Brightness.dark,
+  primary: Color(0xFF5CC8E6),
+  onPrimary: Colors.black,
+  primaryContainer: Color(0xFF003344),
+  onPrimaryContainer: Colors.white,
+  secondary: Colors.white,
+  onSecondary: Colors.black,
+  secondaryContainer: Color(0xFF1F1F1F),
+  onSecondaryContainer: Colors.white,
+  tertiary: Color(0xFFF2D58A),
+  onTertiary: Colors.black,
+  tertiaryContainer: Color(0xFF2E2600),
+  onTertiaryContainer: Colors.white,
+  error: Color(0xFFFF8A80),
+  onError: Colors.black,
+  errorContainer: Color(0xFF5A0000),
+  onErrorContainer: Colors.white,
+  surface: Colors.black,
+  onSurface: Colors.white,
+  onSurfaceVariant: Colors.white,
+  surfaceContainerLowest: Colors.black,
+  surfaceContainerLow: Colors.black,
+  surfaceContainer: Colors.black,
+  surfaceContainerHigh: Color(0xFF141414),
+  surfaceContainerHighest: Color(0xFF2A2A2A),
+  outline: Colors.white,
+  outlineVariant: Colors.white,
+  inverseSurface: Colors.white,
+  onInverseSurface: Colors.black,
+  inversePrimary: AppColors.navy,
+  shadow: Colors.black,
+  scrim: Colors.black,
+  surfaceTint: Colors.transparent,
+);
+
+ThemeData _themeFrom(ColorScheme scheme, {double borderWidth = 1}) {
+  final light = scheme.brightness == Brightness.light;
+  final base = ThemeData(colorScheme: scheme, useMaterial3: true, fontFamily: fontBody, fontFamilyFallback: fontFallback);
+  final text = base.textTheme;
+  final heading = scheme.onSurface;
+  // Teal underline / indicator colour for this theme.
+  final accent = light ? AppColors.teal : scheme.primary;
+  final barBg = light ? Colors.white : (borderWidth > 1 ? Colors.black : const Color(0xFF1A1E21));
+
+  // Small radii: the website is mostly square.
+  const radius = BorderRadius.all(Radius.circular(4));
+  const shape = RoundedRectangleBorder(borderRadius: radius);
+  final edge = BorderSide(color: scheme.outlineVariant, width: borderWidth);
+
+  // Bebas Neue is all caps and narrow: it needs a larger size than body text.
+  TextStyle? display(TextStyle? s, double size) => s?.copyWith(
+        fontFamily: fontDisplay,
+        fontWeight: FontWeight.w400,
+        fontSize: size,
+        letterSpacing: 0.6,
+        height: 1.0,
+        color: heading,
+      );
+  final label = text.labelLarge!.copyWith(fontFamily: fontBody, fontWeight: FontWeight.w700, letterSpacing: 0.4);
 
   return base.copyWith(
     scaffoldBackgroundColor: scheme.surface,
     splashFactory: InkRipple.splashFactory,
     textTheme: text.copyWith(
-      displaySmall: t(text.displaySmall, 44, FontWeight.w800, spacing: -1.2, height: 1.02),
-      headlineLarge: t(text.headlineLarge, 38, FontWeight.w800, spacing: -1.0, height: 1.05),
-      headlineMedium: t(text.headlineMedium, 33, FontWeight.w800, spacing: -0.8, height: 1.08),
-      headlineSmall: t(text.headlineSmall, 28, FontWeight.w800, spacing: -0.6, height: 1.1),
-      titleLarge: t(text.titleLarge, 21, FontWeight.w800, spacing: -0.3, height: 1.22),
-      titleMedium: t(text.titleMedium, 17, FontWeight.w700, height: 1.3),
-      titleSmall: t(text.titleSmall, 15, FontWeight.w700, height: 1.3),
-      bodyLarge: t(text.bodyLarge, 17, FontWeight.w400, height: 1.45),
-      bodyMedium: t(text.bodyMedium, 15.5, FontWeight.w400, height: 1.45),
-      bodySmall: t(text.bodySmall, 13.5, FontWeight.w400, height: 1.4, color: soft),
-      labelLarge: t(text.labelLarge, 15, FontWeight.w700, spacing: 0.1),
-      labelMedium: text.labelMedium?.merge(mono(12.5, color: ink)),
-      labelSmall: text.labelSmall?.merge(mono(11, color: soft, spacing: 1.0)),
+      displayLarge: display(text.displayLarge, 64),
+      displayMedium: display(text.displayMedium, 52),
+      displaySmall: display(text.displaySmall, 44),
+      headlineLarge: display(text.headlineLarge, 38),
+      headlineMedium: display(text.headlineMedium, 34),
+      headlineSmall: display(text.headlineSmall, 29),
+      titleLarge: text.titleLarge?.copyWith(fontWeight: FontWeight.w700, fontSize: 21, height: 1.25, color: heading),
+      titleMedium: text.titleMedium?.copyWith(fontWeight: FontWeight.w700, fontSize: 17.5, height: 1.3, color: heading),
+      titleSmall: text.titleSmall?.copyWith(fontWeight: FontWeight.w700, fontSize: 15.5, height: 1.3, color: heading),
+      bodyLarge: text.bodyLarge?.copyWith(fontSize: 16.5, height: 1.5),
+      bodyMedium: text.bodyMedium?.copyWith(fontSize: 15, height: 1.5),
+      bodySmall: text.bodySmall?.copyWith(fontSize: 13.5, height: 1.45, color: scheme.onSurfaceVariant),
+      labelLarge: label.copyWith(fontSize: 15),
+      labelMedium: text.labelMedium?.copyWith(fontWeight: FontWeight.w700, fontSize: 13, letterSpacing: 0.4),
+      labelSmall: text.labelSmall?.copyWith(fontWeight: FontWeight.w700, fontSize: 11.5, letterSpacing: 0.8),
     ),
     appBarTheme: AppBarTheme(
-      backgroundColor: scheme.surface,
-      foregroundColor: ink,
+      backgroundColor: barBg,
+      foregroundColor: light ? AppColors.navy : scheme.onSurface,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
-      titleSpacing: 4,
-      // A ruled header, like the top of an instrument panel.
-      shape: Border(bottom: BorderSide(color: ink, width: 2)),
-      titleTextStyle: mono(14.5, weight: FontWeight.w700, color: ink, spacing: 0.8),
+      shape: Border(bottom: edge),
+      titleTextStyle: TextStyle(
+        fontFamily: fontDisplay,
+        fontSize: 25,
+        letterSpacing: 0.6,
+        height: 1.1,
+        color: light ? AppColors.navy : scheme.onSurface,
+      ),
     ),
+    // White cards on the grey page band, lifted by a soft shadow as on the
+    // website's feed cards (no shadow in dark themes: a hairline instead).
     cardTheme: CardThemeData(
-      elevation: 0,
+      elevation: light ? 1.5 : 0,
+      shadowColor: Colors.black.withAlpha(60),
       margin: EdgeInsets.zero,
       color: scheme.surfaceContainerLowest,
       surfaceTintColor: Colors.transparent,
-      shape: borderWidth > 1.5 ? RoundedRectangleBorder(side: BorderSide(color: ink, width: borderWidth)) : square,
+      shape: RoundedRectangleBorder(borderRadius: radius, side: light ? BorderSide.none : edge),
     ),
-    // Primary action: a solid ink slab.
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
-        backgroundColor: scheme.primary,
-        foregroundColor: scheme.onPrimary,
-        disabledBackgroundColor: scheme.outlineVariant,
-        disabledForegroundColor: soft,
-        minimumSize: const Size.fromHeight(56),
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        shape: square,
-        textStyle: const TextStyle(fontFamily: fontText, fontWeight: FontWeight.w800, fontSize: 16.5, letterSpacing: 0.1),
+        minimumSize: const Size.fromHeight(52),
+        shape: shape,
+        textStyle: label.copyWith(fontSize: 16, letterSpacing: 0.8),
       ),
     ),
-    elevatedButtonTheme: ElevatedButtonThemeData(style: ElevatedButton.styleFrom(elevation: 0, shape: square)),
+    elevatedButtonTheme: ElevatedButtonThemeData(
+      style: ElevatedButton.styleFrom(elevation: 0, shape: shape, textStyle: label),
+    ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
-        foregroundColor: ink,
-        minimumSize: const Size(56, 48),
-        side: heavy,
-        shape: square,
-        textStyle: const TextStyle(fontFamily: fontText, fontWeight: FontWeight.w700, fontSize: 15),
+        foregroundColor: scheme.primary,
+        side: BorderSide(color: scheme.primary, width: borderWidth == 1 ? 1.5 : borderWidth),
+        shape: shape,
+        textStyle: label.copyWith(letterSpacing: 0.6),
       ),
     ),
-    // Text actions are underlined words, not floating labels.
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(
-        foregroundColor: ink,
-        shape: square,
-        textStyle: TextStyle(
-          fontFamily: fontText,
-          fontWeight: FontWeight.w700,
-          fontSize: 15,
-          decoration: TextDecoration.underline,
-          decorationThickness: 2,
-          decorationColor: ink,
-        ),
+        foregroundColor: light ? AppColors.navy : scheme.primary,
+        shape: shape,
+        textStyle: label,
       ),
     ),
-    iconButtonTheme: IconButtonThemeData(style: IconButton.styleFrom(shape: square, foregroundColor: ink)),
+    iconButtonTheme: IconButtonThemeData(style: IconButton.styleFrom(shape: shape)),
     floatingActionButtonTheme: FloatingActionButtonThemeData(
       backgroundColor: scheme.primary,
       foregroundColor: scheme.onPrimary,
@@ -247,149 +358,125 @@ ThemeData _themeFrom(ColorScheme scheme, {double borderWidth = 1.5, required Col
       focusElevation: 0,
       hoverElevation: 0,
       highlightElevation: 0,
-      shape: square,
+      shape: shape,
     ),
     segmentedButtonTheme: SegmentedButtonThemeData(
       style: SegmentedButton.styleFrom(
-        shape: square,
-        side: heavy,
-        foregroundColor: ink,
+        shape: shape,
+        side: BorderSide(color: scheme.outline, width: borderWidth),
         selectedBackgroundColor: scheme.primary,
         selectedForegroundColor: scheme.onPrimary,
-        textStyle: const TextStyle(fontFamily: fontText, fontWeight: FontWeight.w700, fontSize: 14.5),
+        textStyle: label.copyWith(fontSize: 14),
       ),
     ),
+    // Tags as on the website: rounded, thin outline.
     chipTheme: ChipThemeData(
-      shape: RoundedRectangleBorder(side: BorderSide(color: ink, width: 1.5)),
-      side: BorderSide(color: ink, width: 1.5),
-      backgroundColor: scheme.surfaceContainerLowest,
+      shape: StadiumBorder(side: BorderSide(color: scheme.outline, width: borderWidth)),
       selectedColor: scheme.primary,
       checkmarkColor: scheme.onPrimary,
-      labelStyle: TextStyle(fontFamily: fontText, fontWeight: FontWeight.w700, fontSize: 13.5, color: ink),
-      secondaryLabelStyle: TextStyle(fontFamily: fontText, fontWeight: FontWeight.w700, fontSize: 13.5, color: scheme.onPrimary),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      secondarySelectedColor: scheme.primary,
+      backgroundColor: scheme.surfaceContainerLowest,
+      labelStyle: label.copyWith(color: scheme.onSurface, fontSize: 14, letterSpacing: 0.2),
+      secondaryLabelStyle: label.copyWith(color: scheme.onPrimary, fontSize: 14),
+      side: BorderSide(color: scheme.outline, width: borderWidth),
     ),
-    // Fields are a line to write on, not a box.
     inputDecorationTheme: InputDecorationTheme(
-      filled: false,
-      border: UnderlineInputBorder(borderSide: BorderSide(color: soft, width: 1.5)),
-      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: soft, width: 1.5)),
-      focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: ink, width: 3)),
-      disabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: scheme.outlineVariant, width: 1.5)),
-      labelStyle: TextStyle(color: soft, fontWeight: FontWeight.w500),
-      floatingLabelStyle: mono(13, weight: FontWeight.w700, color: ink, spacing: 0.8),
-      hintStyle: TextStyle(color: soft),
-      prefixIconColor: ink,
-      contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 2),
+      filled: true,
+      fillColor: scheme.surfaceContainerLowest,
+      border: OutlineInputBorder(borderRadius: radius, borderSide: edge),
+      enabledBorder: OutlineInputBorder(borderRadius: radius, borderSide: BorderSide(color: scheme.outline, width: borderWidth)),
+      focusedBorder: OutlineInputBorder(borderRadius: radius, borderSide: BorderSide(color: accent, width: 2)),
     ),
-    // The tab bar is an ink panel in every theme; the current tab gets a bar.
+    // Active item: a teal bar under the icon, like the website's main nav.
     navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: navBg,
-      indicatorColor: navInk,
-      indicatorShape: const _BarIndicator(),
+      backgroundColor: barBg,
+      indicatorColor: accent.withAlpha(light ? 22 : 40),
+      indicatorShape: Border(bottom: BorderSide(color: accent, width: 3)),
       surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
       elevation: 0,
-      height: 72,
-      labelTextStyle: WidgetStateProperty.resolveWith((s) => mono(
-            11.5,
-            weight: s.contains(WidgetState.selected) ? FontWeight.w700 : FontWeight.w500,
-            color: s.contains(WidgetState.selected) ? navInk : navInk.withAlpha(150),
-            spacing: 0.4,
+      height: 68,
+      labelTextStyle: WidgetStateProperty.resolveWith((s) => label.copyWith(
+            fontSize: 12.5,
+            letterSpacing: 0.3,
+            fontWeight: s.contains(WidgetState.selected) ? FontWeight.w700 : FontWeight.w400,
+            color: s.contains(WidgetState.selected) ? scheme.primary : scheme.onSurfaceVariant,
           )),
       iconTheme: WidgetStateProperty.resolveWith((s) => IconThemeData(
-            color: s.contains(WidgetState.selected) ? navInk : navInk.withAlpha(150),
-            size: 24,
+            color: s.contains(WidgetState.selected) ? scheme.primary : scheme.onSurfaceVariant,
           )),
     ),
     navigationRailTheme: NavigationRailThemeData(
-      backgroundColor: navBg,
-      indicatorColor: navInk,
-      indicatorShape: const _BarIndicator(),
-      selectedIconTheme: const IconThemeData(color: navInk),
-      unselectedIconTheme: IconThemeData(color: navInk.withAlpha(150)),
-      selectedLabelTextStyle: mono(12, weight: FontWeight.w700, color: navInk),
-      unselectedLabelTextStyle: mono(12, color: navInk.withAlpha(150)),
+      backgroundColor: barBg,
+      indicatorColor: accent.withAlpha(light ? 22 : 40),
+      indicatorShape: Border(left: BorderSide(color: accent, width: 3)),
+      selectedIconTheme: IconThemeData(color: scheme.primary),
+      unselectedIconTheme: IconThemeData(color: scheme.onSurfaceVariant),
+      selectedLabelTextStyle: label.copyWith(color: scheme.primary, fontSize: 12.5),
+      unselectedLabelTextStyle: label.copyWith(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w400, fontSize: 12.5),
     ),
     tabBarTheme: TabBarThemeData(
-      labelColor: ink,
-      unselectedLabelColor: soft,
-      indicatorColor: ink,
+      labelColor: scheme.primary,
+      unselectedLabelColor: scheme.onSurfaceVariant,
+      indicatorColor: accent,
       indicatorSize: TabBarIndicatorSize.label,
       dividerColor: scheme.outlineVariant,
-      labelStyle: const TextStyle(fontFamily: fontText, fontWeight: FontWeight.w800),
+      labelStyle: label,
+      unselectedLabelStyle: label.copyWith(fontWeight: FontWeight.w400),
     ),
     dialogTheme: DialogThemeData(
       backgroundColor: scheme.surfaceContainerLowest,
       surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(side: BorderSide(color: ink, width: 2)),
-      titleTextStyle: TextStyle(fontFamily: fontText, fontWeight: FontWeight.w800, fontSize: 22, color: ink, height: 1.2),
+      shape: RoundedRectangleBorder(borderRadius: radius, side: borderWidth > 1 ? edge : BorderSide.none),
+      titleTextStyle: display(text.headlineSmall, 27),
+      iconColor: accent,
     ),
     bottomSheetTheme: BottomSheetThemeData(
       backgroundColor: scheme.surfaceContainerLowest,
       surfaceTintColor: Colors.transparent,
-      shape: Border(top: BorderSide(color: ink, width: 2)),
-      dragHandleColor: ink,
-      dragHandleSize: const Size(44, 4),
+      dragHandleColor: scheme.outline,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(6))),
+    ),
+    popupMenuTheme: PopupMenuThemeData(
+      color: scheme.surfaceContainerLowest,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: radius, side: edge),
     ),
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
-      backgroundColor: scheme.inverseSurface,
-      contentTextStyle: TextStyle(fontFamily: fontText, color: scheme.onInverseSurface, fontWeight: FontWeight.w500, fontSize: 14.5),
-      actionTextColor: scheme.brightness == Brightness.dark ? AppColors.you : const Color(0xFF9DB2FF),
-      shape: square,
+      backgroundColor: light ? AppColors.navy : scheme.inverseSurface,
+      contentTextStyle: TextStyle(
+        fontFamily: fontBody,
+        fontSize: 15,
+        color: light ? Colors.white : scheme.onInverseSurface,
+      ),
+      actionTextColor: light ? AppColors.gold : scheme.inversePrimary,
+      shape: shape,
     ),
     tooltipTheme: TooltipThemeData(
-      decoration: BoxDecoration(color: scheme.inverseSurface),
-      textStyle: TextStyle(fontFamily: fontText, color: scheme.onInverseSurface, fontSize: 13),
+      decoration: BoxDecoration(color: light ? AppColors.charcoal : scheme.inverseSurface, borderRadius: radius),
+      textStyle: TextStyle(fontFamily: fontBody, fontSize: 13, color: light ? Colors.white : scheme.onInverseSurface),
     ),
-    badgeTheme: BadgeThemeData(backgroundColor: scheme.error, textColor: Colors.white),
-    checkboxTheme: CheckboxThemeData(
-      shape: const RoundedRectangleBorder(),
-      side: BorderSide(color: ink, width: 2),
-      fillColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? ink : Colors.transparent),
-      checkColor: WidgetStatePropertyAll(paper),
+    listTileTheme: ListTileThemeData(
+      shape: shape,
+      titleTextStyle: text.bodyLarge?.copyWith(fontSize: 16, color: scheme.onSurface),
+      subtitleTextStyle: text.bodyMedium?.copyWith(fontSize: 14, color: scheme.onSurfaceVariant),
     ),
-    switchTheme: SwitchThemeData(
-      thumbColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? paper : soft),
-      trackColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? ink : scheme.outlineVariant),
-      trackOutlineColor: WidgetStatePropertyAll(ink.withAlpha(0)),
+    progressIndicatorTheme: ProgressIndicatorThemeData(
+      color: accent,
+      linearTrackColor: scheme.surfaceContainerHighest,
+      circularTrackColor: Colors.transparent,
     ),
-    listTileTheme: const ListTileThemeData(shape: square),
-    progressIndicatorTheme: ProgressIndicatorThemeData(color: ink, linearTrackColor: scheme.outlineVariant),
-    sliderTheme: SliderThemeData(activeTrackColor: ink, thumbColor: ink, inactiveTrackColor: scheme.outlineVariant, trackHeight: 3),
-    dividerTheme: DividerThemeData(color: scheme.outlineVariant, space: 1, thickness: 1),
-    expansionTileTheme: const ExpansionTileThemeData(shape: Border(), collapsedShape: Border()),
-    dropdownMenuTheme: DropdownMenuThemeData(
-      menuStyle: MenuStyle(
-        shape: WidgetStatePropertyAll(RoundedRectangleBorder(side: BorderSide(color: ink, width: 1.5))),
-        backgroundColor: WidgetStatePropertyAll(scheme.surfaceContainerLowest),
-      ),
+    sliderTheme: SliderThemeData(
+      activeTrackColor: scheme.primary,
+      thumbColor: scheme.primary,
+      inactiveTrackColor: scheme.surfaceContainerHighest,
     ),
-    popupMenuTheme: PopupMenuThemeData(
-      shape: RoundedRectangleBorder(side: BorderSide(color: ink, width: 1.5)),
-      color: scheme.surfaceContainerLowest,
+    badgeTheme: BadgeThemeData(backgroundColor: scheme.error, textColor: scheme.onError),
+    dividerTheme: DividerThemeData(color: scheme.outlineVariant, space: 1),
+    expansionTileTheme: const ExpansionTileThemeData(
+      shape: Border(),
+      collapsedShape: Border(),
     ),
   );
-}
-
-/// Navigation indicator: a short bar under the icon instead of a pill.
-class _BarIndicator extends ShapeBorder {
-  const _BarIndicator();
-
-  @override
-  EdgeInsetsGeometry get dimensions => EdgeInsets.zero;
-
-  Rect _bar(Rect r) => Rect.fromLTWH(r.left + r.width * 0.28, r.bottom - 3, r.width * 0.44, 3);
-
-  @override
-  Path getInnerPath(Rect rect, {TextDirection? textDirection}) => Path()..addRect(_bar(rect));
-
-  @override
-  Path getOuterPath(Rect rect, {TextDirection? textDirection}) => Path()..addRect(_bar(rect));
-
-  @override
-  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {}
-
-  @override
-  ShapeBorder scale(double t) => this;
 }

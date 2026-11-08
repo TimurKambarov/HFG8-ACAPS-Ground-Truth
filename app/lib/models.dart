@@ -30,6 +30,30 @@ int? parseLevel5(String s) {
   return null;
 }
 
+/// ACAPS risk categories, exactly as in the Risk Radar export (and on the
+/// ACAPS website). Each risk carries ACAPS's own values; none are invented.
+const riskTypes = [
+  'New emerging risk',
+  'Marked deterioration in an existing crisis',
+  'Future impact of a hazard which has already taken place',
+];
+
+const priorityNeeds = [
+  'Food security',
+  'Protection',
+  'Livelihoods',
+  'Health',
+  'WASH',
+  'Displacement',
+  'Humanitarian access',
+  'Shelter',
+  'Education',
+  'Nutrition',
+];
+
+/// Expected exposure bands (people who may need additional assistance), smallest first.
+const exposureBands = ['<20,000', '20,000-100,000', '100,000-250,000', '250,000-500,000', '>500,000'];
+
 /// "[ACLED 08/04/2026](https://...)" -> "ACLED 08/04/2026"
 String stripMarkdownLinks(String s) => s
     .replaceAllMapped(RegExp(r'\[([^\]]+)\]\([^)]*\)'), (m) => m[1]!)
@@ -144,6 +168,62 @@ class Risk {
     );
   }
 
+  /// One record of the ACAPS API `risk-radar/risk-radar/` endpoint. Field
+  /// names differ from the export (snake_case, lists for countries), but
+  /// `triggers_summary` uses the same "Trigger ID: / Title:" format.
+  /// Marked [custom] so it is saved on the device like a risk made in the app.
+  ///
+  /// Mapping, API field -> our field (the CSV column is in brackets):
+  ///   risk_id                    -> id            (Risk ID)
+  ///   risk_title                 -> title         (Risk Title)
+  ///   risk_type                  -> type          (Risk Type)
+  ///   iso3   ["TCD", "SDN"]      -> iso "TCD, SDN"        (ISO)
+  ///   country ["Chad", "Sudan"]  -> country "Chad, Sudan" (Country)
+  ///   probability "High"         -> probabilityIdx 3 (0 = Very low ... 4 = Very high)
+  ///   impact "4"                 -> impact 4
+  ///   risk_level / risk_trend / status  -> level / trend / status
+  ///   hazard_ + impact_materialisation_description -> materialisation
+  ///   triggers_summary           -> triggers (parsed like the CSV column)
+  /// Using the same parsers as the CSV (parseLevel5, parseTriggers,
+  /// stripMarkdownLinks) means an imported risk looks exactly like one from
+  /// the export everywhere in the app.
+  factory Risk.fromApi(Map<String, dynamic> m) {
+    // Reads a field as clean text: null -> "", lists -> "a, b", trimmed.
+    String f(String k) {
+      final v = m[k];
+      if (v == null) return '';
+      if (v is List) return v.map((x) => '$x'.trim()).where((x) => x.isNotEmpty).join(', ');
+      return '$v'.trim();
+    }
+
+    // "What happened": the API splits it into hazard and impact; we show both
+    // as two paragraphs, like Risk.fromRow does for the CSV.
+    final mat = [f('hazard_materialisation_description'), f('impact_materialisation_description')]
+        .where((s) => s.isNotEmpty)
+        .join('\n\n');
+    // The API also has a plain `triggers` list (ids only); the summary has the
+    // titles and descriptions the survey needs.
+    final triggers = m['triggers_summary'];
+    return Risk(
+      custom: true,
+      id: f('risk_id'),
+      title: f('risk_title'),
+      type: f('risk_type'),
+      country: f('country'),
+      iso: f('iso3'),
+      rationale: stripMarkdownLinks(f('rationale')),
+      probabilityIdx: parseLevel5(f('probability')),
+      impact: int.tryParse(f('impact')),
+      level: f('risk_level'),
+      trend: f('risk_trend'),
+      status: f('status'),
+      exposure: f('expected_exposure'),
+      needs: f('expected_priority_needs'),
+      materialisation: stripMarkdownLinks(mat),
+      triggers: parseTriggers(triggers is String ? triggers : ''),
+    );
+  }
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
@@ -186,6 +266,30 @@ class Risk {
         ],
       );
 
+  /// Same risk with a new status (and what happened), e.g. after a Risk Radar sync.
+  ///
+  /// [Risk] is immutable (all fields final), so instead of changing a risk we
+  /// build a copy with the new values. Everything else, including the id, stays
+  /// the same, so answers and comments stay linked to the risk.
+  Risk withStatus(String status, {String? materialisation}) => Risk(
+        custom: custom,
+        id: id,
+        title: title,
+        type: type,
+        country: country,
+        iso: iso,
+        rationale: rationale,
+        probabilityIdx: probabilityIdx,
+        impact: impact,
+        level: level,
+        trend: trend,
+        status: status,
+        exposure: exposure,
+        needs: needs,
+        materialisation: materialisation ?? this.materialisation,
+        triggers: triggers,
+      );
+
   bool get isActive => status.toLowerCase() == 'active';
   bool get materialised => status.toLowerCase() == 'materialised';
   bool get isResolved =>
@@ -199,7 +303,10 @@ class Risk {
   bool inCountry(String c) =>
       country.split(',').map((s) => s.trim()).contains(c);
 
-  String get shortType {
+  String get shortType => shortTypeOf(type);
+
+  /// Short label for a risk type, for chips: "New risk", "Deterioration", "Hazard impact".
+  static String shortTypeOf(String type) {
     final t = type.toLowerCase();
     if (t.startsWith('new')) return 'New risk';
     if (t.startsWith('marked')) return 'Deterioration';
@@ -207,11 +314,43 @@ class Risk {
     return type.isEmpty ? 'Risk' : type;
   }
 
+  /// Expected priority needs as separate categories, in ACAPS's order.
+  List<String> get needList {
+    final given = needs.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+    return [...priorityNeeds.where(given.contains), ...given.where((s) => !priorityNeeds.contains(s))];
+  }
+
+  /// Position of the expected exposure in [exposureBands], or null if unknown.
+  int? get exposureIdx {
+    final i = exposureBands.indexOf(exposure.trim());
+    return i < 0 ? null : i;
+  }
+
+  /// Everything a search should match: ID, title, countries and categories.
+  String get searchText => '$id $title $country $type $needs $exposure'.toLowerCase();
+
   /// First paragraph of the rationale, trimmed for a card.
   String get summary {
     final p = rationale.split(RegExp(r'\n\s*\n')).first.trim();
     return p.length > 320 ? '${p.substring(0, 320).trimRight()}…' : p;
   }
+}
+
+/// A risk whose status in the ACAPS Risk Radar differs from the app's.
+/// Produced by AppState.statusChanges, listed on the "Sync statuses" screen,
+/// applied by AppState.applyStatusChanges.
+class StatusChange {
+  /// The risk as it is in the app now (so [from] is its current status).
+  final Risk risk;
+
+  /// The status in the Risk Radar: "Active", "Materialised" or "Not materialised".
+  final String to;
+
+  /// What happened, from the API (empty if it has no text).
+  final String materialisation;
+  const StatusChange(this.risk, this.to, this.materialisation);
+
+  String get from => risk.status;
 }
 
 /// Hand-written one-line summaries for demo risks; others fall back to the title.

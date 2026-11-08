@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 
-import 'design.dart';
+import 'brand.dart';
 import 'models.dart';
 import 'screens/survey.dart';
 import 'store.dart';
 import 'theme.dart';
 
-/// Section label: a short ink rule and the title in mono capitals.
+/// Section heading as on acaps.org: Bebas Neue caps with a short teal bar.
 class SectionLabel extends StatelessWidget {
   final String text;
   final EdgeInsets padding;
@@ -16,12 +16,101 @@ class SectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: padding,
-      child: Eyebrow(text.toUpperCase()),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            text.toUpperCase(),
+            style: TextStyle(
+              fontFamily: fontDisplay,
+              fontSize: 22,
+              height: 1.05,
+              letterSpacing: 0.6,
+              color: Theme.of(context).colorScheme.onSurface,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const AccentBar(width: 28),
+        ],
+      ),
     );
   }
 }
 
-/// ACAPS risk level as a square tag in its heat colour.
+/// A risk's ACAPS categories as tags: risk type, expected priority needs
+/// and expected exposure (as on the ACAPS website). Shows only what ACAPS
+/// recorded. [compact] (risk cards): the type and up to [maxNeeds] needs.
+class CategoryChips extends StatelessWidget {
+  final Risk risk;
+  final bool compact;
+  final int maxNeeds;
+  const CategoryChips(this.risk, {super.key, this.compact = false, this.maxNeeds = 3});
+
+  static IconData typeIcon(String type) {
+    final t = type.toLowerCase();
+    if (t.startsWith('new')) return Icons.fiber_new_outlined;
+    if (t.startsWith('marked')) return Icons.trending_down;
+    return Icons.flood_outlined;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final needs = risk.needList;
+    final shown = compact ? needs.take(maxNeeds).toList() : needs;
+    final chips = <Widget>[
+      if (risk.type.isNotEmpty)
+        Tooltip(
+          message: 'Risk type: ${risk.type}',
+          child: _Chip(compact ? risk.shortType : risk.type, typeIcon(risk.type), strong: true),
+        ),
+      for (final n in shown) Tooltip(message: 'Expected priority need', child: _Chip(n, null)),
+      if (compact && needs.length > shown.length) _Chip('+${needs.length - shown.length}', null),
+      if (!compact && risk.exposureIdx != null)
+        Tooltip(
+          message: 'Expected exposure: people who may need additional assistance',
+          child: _Chip('${risk.exposure} people', Icons.groups_outlined),
+        ),
+    ];
+    if (chips.isEmpty) return const SizedBox.shrink();
+    return Wrap(spacing: 6, runSpacing: 6, children: chips);
+  }
+}
+
+/// Topic tag: square, tinted, like the category labels on ACAPS reports.
+class _Chip extends StatelessWidget {
+  final String text;
+  final IconData? icon;
+  final bool strong;
+  const _Chip(this.text, this.icon, {this.strong = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final light = cs.brightness == Brightness.light;
+    final fg = strong ? (light ? AppColors.navy : cs.primary) : cs.onSurfaceVariant;
+    final bg = strong ? cs.primaryContainer.withAlpha(light ? 255 : 120) : cs.surfaceContainerHighest.withAlpha(light ? 200 : 255);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(2),
+        border: cs.outlineVariant == Colors.white ? Border.all(color: Colors.white) : null,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[Icon(icon, size: 13, color: fg), const SizedBox(width: 4)],
+          Flexible(
+            child: Text(text, style: TextStyle(fontSize: 12, fontWeight: strong ? FontWeight.w700 : FontWeight.w400, color: fg)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Risk level as a solid tag (red / sand / gold), like a map legend entry.
 class LevelBadge extends StatelessWidget {
   final String level;
   const LevelBadge(this.level, {super.key});
@@ -29,19 +118,31 @@ class LevelBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = levelColor(level);
-    final fg = level == 'High' ? Colors.white : AppColors.ink;
+    final unrated = level.isEmpty;
+    final cs = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      color: c,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: unrated ? Colors.transparent : c,
+        borderRadius: BorderRadius.circular(2),
+        border: unrated ? Border.all(color: cs.outline) : null,
+      ),
       child: Text(
-        level.isEmpty ? 'UNRATED' : '${level.toUpperCase()} RISK',
-        style: mono(11, weight: FontWeight.w700, color: fg, spacing: 0.9),
+        unrated ? 'UNRATED' : '${level.toUpperCase()} RISK',
+        style: TextStyle(
+          color: unrated ? cs.onSurfaceVariant : onColor(c),
+          fontWeight: FontWeight.w700,
+          fontSize: 11.5,
+          letterSpacing: 0.9,
+          height: 1.2,
+        ),
       ),
     );
   }
 }
 
-/// Small square tag. [strong] = solid ink.
+/// Status tag: rounded with a thin teal outline (the website's tag style);
+/// [strong] is solid navy.
 class Pill extends StatelessWidget {
   final String text;
   final bool strong;
@@ -51,27 +152,41 @@ class Pill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final fg = strong ? cs.surface : cs.onSurface;
+    final light = cs.brightness == Brightness.light;
+    final accent = light ? AppColors.tealText : cs.primary;
+    final fg = strong ? cs.onPrimary : accent;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
       decoration: BoxDecoration(
-        color: strong ? cs.onSurface : Colors.transparent,
-        border: Border.all(color: cs.onSurface, width: 1.5),
+        color: strong ? cs.primary : Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: strong ? cs.primary : accent.withAlpha(light ? 150 : 200)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[Icon(icon, size: 13, color: fg), const SizedBox(width: 4)],
-          // Wraps instead of overflowing when the tag is wider than its space.
-          Flexible(child: Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: fg, height: 1.2))),
+          // Wraps instead of overflowing when the pill is wider than its space.
+          Flexible(child: Text(text, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: fg))),
         ],
       ),
     );
   }
 }
 
-/// A person is a dot. Named people get their initials in mono; anonymous
-/// people are a plain grey dot. [ring] marks you (blue).
+/// Avatar colours: the ACAPS palette, darkened enough for white initials.
+const _avatarColors = [
+  AppColors.navy,
+  AppColors.tealText,
+  Color(0xFFA0592A), // sand, dark
+  Color(0xFF3F7A37), // green, dark
+  Color(0xFF80558B), // severity purple
+  Color(0xFFB83232), // red, dark
+  Color(0xFF7A6630), // gold, dark
+  AppColors.graphite,
+];
+
+/// Initials avatar with a colour derived from the name; anonymous gets a mask.
 class Avatar extends StatelessWidget {
   final String name;
   final double size;
@@ -84,37 +199,44 @@ class Avatar extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final anon = name == anonymousName || name.contains('anonymous');
+    final color = anon ? cs.onSurfaceVariant : _avatarColors[stableHash(name) % _avatarColors.length];
     final initials = name
         .split(RegExp(r'[\s\-_]+'))
         .where((p) => p.isNotEmpty && !RegExp(r'^\d+$').hasMatch(p))
         .take(2)
         .map((p) => p[0].toUpperCase())
         .join();
-    final you = youColor(context);
-    final bg = ring ? you : (anon ? cs.onSurfaceVariant : cs.onSurface);
 
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: faded ? Colors.transparent : bg,
-        border: faded ? Border.all(color: cs.outlineVariant, width: 1.5) : null,
-        boxShadow: ring ? [BoxShadow(color: you.withAlpha(80), spreadRadius: size * 0.12)] : null,
+        color: faded ? Colors.transparent : (anon ? color.withAlpha(50) : color),
+        border: Border.all(
+          color: ring ? AppColors.teal : (faded ? cs.outlineVariant : Colors.transparent),
+          width: ring ? 2.5 : 1.5,
+        ),
       ),
       alignment: Alignment.center,
       child: anon
-          ? null
+          ? Icon(Icons.visibility_off_outlined, size: size * 0.48, color: faded ? cs.outlineVariant : cs.onSurface)
           : Text(
               initials.isEmpty ? '?' : initials,
-              style: mono(size * 0.36, weight: FontWeight.w700, color: faded ? cs.outlineVariant : cs.surface, spacing: 0),
+              style: TextStyle(
+                fontFamily: fontDisplay,
+                color: faded ? cs.outlineVariant : Colors.white,
+                fontSize: size * 0.46,
+                height: 1.0,
+                letterSpacing: 0.5,
+              ),
             ),
     );
   }
 }
 
-/// Selectable option (used for anonymity levels): a big mono number, the
-/// title and what it means. Selected = ink frame and a filled square.
+/// Selectable option card (used for anonymity levels): a teal edge on the
+/// left when selected.
 class OptionTile extends StatelessWidget {
   final String title;
   final String subtitle;
@@ -134,46 +256,42 @@ class OptionTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final number = RegExp(r'Level (\d)').firstMatch(title)?.group(1);
+    final light = cs.brightness == Brightness.light;
+    final accent = light ? AppColors.teal : cs.primary;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Material(
-        color: selected ? cs.surfaceContainerLowest : Colors.transparent,
-        shape: RoundedRectangleBorder(side: BorderSide(color: selected ? cs.onSurface : cs.outlineVariant, width: selected ? 2.5 : 1.5)),
+        color: selected ? cs.primaryContainer.withAlpha(light ? 160 : 110) : cs.surfaceContainerLowest,
         child: InkWell(
           onTap: onTap,
-          child: Padding(
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(color: selected ? accent : cs.outlineVariant, width: 4),
+                top: BorderSide(color: selected ? accent.withAlpha(110) : cs.outlineVariant),
+                right: BorderSide(color: selected ? accent.withAlpha(110) : cs.outlineVariant),
+                bottom: BorderSide(color: selected ? accent.withAlpha(110) : cs.outlineVariant),
+              ),
+            ),
             padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(
-                  width: 34,
-                  child: number != null
-                      ? Text('0$number', style: mono(20, weight: FontWeight.w700, color: selected ? cs.onSurface : cs.onSurfaceVariant))
-                      : Icon(icon, color: selected ? cs.onSurface : cs.onSurfaceVariant),
-                ),
-                const SizedBox(width: 10),
+                Icon(icon, color: selected ? (light ? AppColors.navy : cs.primary) : cs.onSurfaceVariant),
+                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(title, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15.5, color: cs.onSurface)),
-                      const SizedBox(height: 3),
-                      Text(subtitle, style: TextStyle(fontSize: 13.5, height: 1.35, color: cs.onSurfaceVariant)),
+                      Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15.5)),
+                      const SizedBox(height: 2),
+                      Text(subtitle, style: TextStyle(fontSize: 13.5, height: 1.4, color: cs.onSurfaceVariant)),
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  width: 20,
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: selected ? cs.onSurface : Colors.transparent,
-                    border: Border.all(color: selected ? cs.onSurface : cs.outlineVariant, width: 2),
-                  ),
-                  child: selected ? Icon(Icons.check, size: 14, color: cs.surface) : null,
+                AnimatedOpacity(
+                  opacity: selected ? 1 : 0,
+                  duration: const Duration(milliseconds: 150),
+                  child: Icon(Icons.check_circle, color: accent),
                 ),
               ],
             ),
@@ -190,8 +308,49 @@ IconData anonymityIcon(Anonymity a) => switch (a) {
       Anonymity.anonymous => Icons.visibility_off_outlined,
     };
 
-/// A risk in a list, styled as a dossier tab: the countries as big ISO
-/// codes, the one-liner, ACAPS's probability as heat, and the panel as dots.
+/// White card with a coloured left edge, like the feed cards on acaps.org.
+class EdgeCard extends StatelessWidget {
+  final Color edge;
+  final Widget child;
+  final VoidCallback? onTap;
+  final EdgeInsets padding;
+  final EdgeInsets margin;
+  final Color? color;
+  const EdgeCard({
+    super.key,
+    required this.edge,
+    required this.child,
+    this.onTap,
+    this.padding = const EdgeInsets.fromLTRB(16, 14, 16, 14),
+    this.margin = const EdgeInsets.symmetric(vertical: 6),
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: margin,
+      child: Card(
+        color: color,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(width: 3, color: edge),
+                Expanded(child: Padding(padding: padding, child: child)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A risk in a list: tap to open its survey.
 class RiskTile extends StatelessWidget {
   final Risk risk;
   final String? trailing;
@@ -205,88 +364,66 @@ class RiskTile extends StatelessWidget {
     final me = appState.me;
     final done = me != null && appState.responseOf(me, risk) != null;
     final skipped = !done && risk.isActive && appState.isSkipped(risk);
-    final p = risk.probabilityIdx;
-    final stripe = risk.isResolved ? cs.onSurfaceVariant : (p == null ? cs.outlineVariant : scaleColors[p]);
-    final panel = appState.panelForRisk(risk).length;
-    final answered = appState.respondents(risk).length;
+    final edge = risk.isResolved ? cs.outline : levelColor(risk.level);
+    final n = risk.surveyItems.length;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Card(
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => SurveyScreen(risk: risk, start: done || risk.isResolved ? SurveyStart.summary : SurveyStart.intro),
-          )),
-          child: IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(width: 8, color: stripe),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Expanded(child: IsoCode(risk, size: 20)),
-                            if (risk.isResolved) ...[const Pill('Closed', icon: Icons.history_edu), const SizedBox(width: 6)],
-                            if (skipped) ...[const Pill('Skipped', icon: Icons.snooze_outlined), const SizedBox(width: 6)],
-                            Text(risk.id, style: mono(12, weight: FontWeight.w700, color: cs.onSurfaceVariant)),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          risk.oneLiner,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: t.titleMedium?.copyWith(fontWeight: FontWeight.w800, height: 1.25),
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            HeatChip(p == null ? null : p + 1, showRange: false),
-                            const SizedBox(width: 10),
-                            if (panel > 0) Flexible(child: PanelDots(total: panel, answered: answered, youAnswered: done, size: 8)),
-                            const SizedBox(width: 10),
-                            // Shrinks and wraps on narrow phones instead of overflowing.
-                            Expanded(
-                              child: Align(
-                                alignment: Alignment.centerRight,
-                                child: done && !risk.isResolved
-                                    ? Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(Icons.check, color: youColor(context), size: 18),
-                                          const SizedBox(width: 3),
-                                          Text('ANSWERED', style: mono(11, weight: FontWeight.w700, color: youColor(context), spacing: 1)),
-                                        ],
-                                      )
-                                    : Text(trailing ?? '2 min',
-                                        textAlign: TextAlign.end,
-                                        style: mono(11.5, color: cs.onSurfaceVariant, spacing: 0.2)),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
+    return EdgeCard(
+      edge: edge,
+      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => SurveyScreen(risk: risk, start: done || risk.isResolved ? SurveyStart.summary : SurveyStart.intro),
+      )),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Eyebrow('${risk.id}  ·  ${risk.country}')),
+              if (risk.isResolved) const Pill('Closed', icon: Icons.history_edu),
+              if (skipped) const Pill('Skipped', icon: Icons.snooze_outlined),
+            ],
           ),
-        ),
+          const SizedBox(height: 6),
+          Text(
+            risk.oneLiner,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: t.titleMedium?.copyWith(fontSize: 17, height: 1.28),
+          ),
+          const SizedBox(height: 10),
+          CategoryChips(risk, compact: true),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              LevelBadge(risk.level),
+              const SizedBox(width: 10),
+              // Shrinks and wraps on narrow phones instead of overflowing.
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: done && !risk.isResolved
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('ANSWERED', style: Eyebrow.style(context).copyWith(fontSize: 11)),
+                            const SizedBox(width: 4),
+                            Icon(Icons.check_circle, color: cs.brightness == Brightness.light ? AppColors.teal : cs.primary, size: 20),
+                          ],
+                        )
+                      : Text(trailing ?? '${n + 1} short screens · 2 min',
+                          textAlign: TextAlign.end, style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 }
 
-/// Risk header (countries, ID, one-liner, ACAPS rating). Also used for the
-/// "forecast matured" block, so both look like the same dossier.
+/// Risk header (code, country, one-liner, ACAPS rating) on a tinted panel
+/// with faint contour lines. Also used for the "forecast matured" block, so
+/// both look like the same risk card.
 class RiskHeader extends StatelessWidget {
   final Risk risk;
   final Widget? footer;
@@ -296,52 +433,40 @@ class RiskHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     final p = risk.probabilityIdx;
+    final c = levelColor(risk.level);
     return Container(
       decoration: BoxDecoration(
-        color: cs.surfaceContainerLowest,
-        border: Border(top: BorderSide(color: p == null ? cs.onSurface : scaleColors[p], width: 8)),
+        color: Color.alphaBlend(c.withAlpha(dark ? 30 : 20), cs.surfaceContainerLowest),
+        border: Border(left: BorderSide(color: c, width: 4)),
       ),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Stack(
         children: [
-          Row(
-            children: [
-              Expanded(child: IsoCode(risk, size: 26)),
-              Text(risk.id, style: mono(13, weight: FontWeight.w700, color: cs.onSurfaceVariant)),
-            ],
+          Positioned.fill(child: TopoLines(color: cs.onSurface.withAlpha(dark ? 22 : 16), seed: stableHash(risk.id) % 97, scale: 120)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: Eyebrow('${risk.id}  ·  ${risk.country}')),
+                    LevelBadge(risk.level),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(risk.oneLiner, style: t.titleMedium),
+                const SizedBox(height: 10),
+                Text(
+                  'ACAPS: ${p == null ? 'unrated' : '${levelLabels[p].toLowerCase()} probability (${probabilityRanges[p]})'}'
+                  '${risk.impact == null ? '' : ' · impact ${risk.impact}/5'}',
+                  style: t.bodySmall?.copyWith(color: cs.onSurface.withAlpha(200)),
+                ),
+                if (footer != null) ...[const SizedBox(height: 12), footer!],
+              ],
+            ),
           ),
-          const SizedBox(height: 2),
-          Text(risk.country, style: t.bodySmall),
-          const SizedBox(height: 10),
-          Text(risk.oneLiner, style: t.titleLarge),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 14,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Text('ACAPS ', style: mono(11, weight: FontWeight.w700, color: cs.onSurfaceVariant, spacing: 1)),
-                HeatChip(p == null ? null : p + 1),
-              ]),
-              if (risk.impact != null)
-                Row(mainAxisSize: MainAxisSize.min, children: [
-                  Text('IMPACT ', style: mono(11, weight: FontWeight.w700, color: cs.onSurfaceVariant, spacing: 1)),
-                  Pips(risk.impact),
-                  Text('  ${risk.impact}/5', style: mono(11.5, weight: FontWeight.w700, color: cs.onSurface)),
-                ]),
-            ],
-          ),
-          // Plain words too, so colour never carries the meaning alone.
-          const SizedBox(height: 8),
-          Text(
-            'ACAPS: ${p == null ? 'unrated' : '${levelLabels[p].toLowerCase()} probability (${probabilityRanges[p]})'}'
-            '${risk.impact == null ? '' : ' · impact ${risk.impact}/5'}',
-            style: t.bodySmall,
-          ),
-          if (footer != null) ...[const SizedBox(height: 14), footer!],
         ],
       ),
     );
@@ -356,7 +481,6 @@ class Reveal extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) return child;
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
       duration: Duration(milliseconds: 380 + delayMs),
@@ -370,7 +494,8 @@ class Reveal extends StatelessWidget {
   }
 }
 
-/// A note: a thick bar in its colour on the left, icon and text.
+/// Info box as on the website ("How is the severity level calculated?"):
+/// a tinted panel with a coloured bar on the left.
 class InfoBanner extends StatelessWidget {
   final IconData icon;
   final String text;
@@ -380,19 +505,20 @@ class InfoBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final c = color ?? cs.onSurface;
+    final light = cs.brightness == Brightness.light;
+    final c = color ?? (light ? AppColors.teal : cs.primary);
     return Container(
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerLowest,
-        border: Border(left: BorderSide(color: c, width: 5)),
-      ),
       padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(c.withAlpha(light ? 24 : 40), cs.surfaceContainerLowest),
+        border: Border(left: BorderSide(color: c, width: 4)),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: c, size: 20),
+          Icon(icon, color: readable(c), size: 20),
           const SizedBox(width: 10),
-          Expanded(child: Text(text, style: TextStyle(fontSize: 14, height: 1.4, color: cs.onSurface))),
+          Expanded(child: Text(text, style: TextStyle(fontSize: 14, height: 1.45, color: cs.onSurface))),
         ],
       ),
     );
@@ -454,10 +580,11 @@ class DisplaySettings extends StatelessWidget {
                   ),
                 ),
                 SizedBox(
-                  width: 52,
-                  child: Text('${(appState.textScale * 100).round()}%', textAlign: TextAlign.end, style: mono(14, weight: FontWeight.w700)),
+                  width: 48,
+                  child: Text('${(appState.textScale * 100).round()}%', textAlign: TextAlign.end,
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
                 ),
-                const Text('A', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                const Text('A', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
               ],
             ),
           ],

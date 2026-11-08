@@ -113,7 +113,11 @@ double snapTextScale(double v) =>
 const minPanel = 3;
 const minResolvedForBrier = 3;
 
-enum Award { superEstimator, usefulInsight, cited, regular }
+enum Award { superEstimator, usefulInsight, cited, regular, referralMaster }
+
+/// Colleagues who must have joined through your referral link for the
+/// Referral Master badge.
+const referralMasterMin = 3;
 
 extension AwardText on Award {
   String get label => switch (this) {
@@ -121,6 +125,7 @@ extension AwardText on Award {
         Award.usefulInsight => 'Useful insight',
         Award.cited => 'Cited in analysis',
         Award.regular => 'Regular',
+        Award.referralMaster => 'Referral Master',
       };
 
   String get why => switch (this) {
@@ -128,6 +133,30 @@ extension AwardText on Award {
         Award.usefulInsight => 'A moderator marked your comment as useful',
         Award.cited => 'Your comment was used in the analysis of another risk',
         Award.regular => 'Answered 5 or more risk surveys',
+        Award.referralMaster => 'Invited $referralMasterMin or more experts who joined the community with your referral link',
+      };
+}
+
+/// The second trust signal, next to how an expert joined: what they do in
+/// the app. Moderators only. In the demo it comes from the simulated history.
+enum Activity { newcomer, active, established }
+
+/// Risks answered to count as active, and accuracy (with at least
+/// [minResolvedForBrier] matured forecasts) that counts as a quality record.
+const activeMinAnswers = 3, establishedMinAccuracy = 70;
+
+extension ActivityText on Activity {
+  String get label => switch (this) {
+        Activity.newcomer => 'New',
+        Activity.active => 'Active',
+        Activity.established => 'Established',
+      };
+
+  String get why => switch (this) {
+        Activity.newcomer => 'Fewer than $activeMinAnswers risks answered so far',
+        Activity.active => '$activeMinAnswers or more risks answered',
+        Activity.established => '$activeMinAnswers+ risks answered, and a comment marked useful or used in analysis, '
+            'or accuracy of $establishedMinAccuracy%+ over $minResolvedForBrier+ matured forecasts',
       };
 }
 
@@ -204,6 +233,9 @@ class ForecastScore {
 
 class AppState extends ChangeNotifier {
   List<Risk> risks = [];
+
+  /// The risks as in the bundled Risk Radar export, before any sync or edits.
+  List<Risk> _bundledRisks = const [];
   bool loaded = false;
   String? error;
   SharedPreferences? _prefs;
@@ -358,6 +390,9 @@ class AppState extends ChangeNotifier {
         }
         return Risk.fromRow(m);
       }).toList();
+      // Untouched copy of the export, so Reset demo can undo imports and
+      // status syncs (see resetDemo).
+      _bundledRisks = List.unmodifiable(risks);
 
       try {
         _prefs = await SharedPreferences.getInstance();
@@ -569,8 +604,15 @@ class AppState extends ChangeNotifier {
     if ((invite == null || !invite.open) && referrer == null) {
       throw StateError('A new profile needs a valid invite or referral link.');
     }
+    // A unique id, even for two registrations in the same instant.
+    var id = 'u${DateTime.now().microsecondsSinceEpoch}';
+    while (expertById(id) != null) {
+      id = '${id}x';
+    }
     final e = Expert(
-      id: 'u${DateTime.now().millisecondsSinceEpoch}',
+      id: id,
+      // The door check, for moderators: how this person got in.
+      joinedVia: referrer != null && (invite == null || !invite.open) ? JoinedVia.expertReferral : JoinedVia.acapsInvite,
       realName: level.needsRealName ? realName?.trim() : null,
       pseudonym: pseudonym.trim(),
       level: level,
@@ -615,7 +657,10 @@ class AppState extends ChangeNotifier {
     sessionModeratorId = null;
     _bannerDismissed.clear();
     autoOpened.clear(); // a reset demo shows the entry pop-up again
-    risks.removeWhere((r) => r.custom);
+    // Back to the export exactly as shipped: drops imported / app-made risks
+    // and every status synced from the ACAPS API.
+    risks = [..._bundledRisks];
+    _radarUpdates.clear();
     _seed();
     _statsCache.clear();
     notifyListeners();
@@ -925,6 +970,7 @@ class AppState extends ChangeNotifier {
       if (cs.any((c) => c.useful)) Award.usefulInsight,
       if (cs.any((c) => c.usedInRiskId != null)) Award.cited,
       if (responsesOf(e).length >= 5) Award.regular,
+      if (referralsBy(e) >= referralMasterMin) Award.referralMaster,
     };
   }
 
@@ -934,6 +980,15 @@ class AppState extends ChangeNotifier {
     final xs = _brierRanked();
     final i = xs.indexWhere((x) => x.id == e.id);
     return i < 0 ? null : (rank: i + 1, of: xs.length);
+  }
+
+  /// What an expert does in the app, as a trust signal for moderators.
+  Activity expertActivity(Expert e) {
+    if (responsesOf(e).length < activeMinAnswers) return Activity.newcomer;
+    final st = statsOf(e);
+    final usefulComment = commentsBy(e).any((c) => c.useful || c.usedInRiskId != null);
+    final accurate = st.brier != null && st.resolved >= minResolvedForBrier && accuracyPct(st.brier!) >= establishedMinAccuracy;
+    return usefulComment || accurate ? Activity.established : Activity.active;
   }
 
   List<Expert> _brierRanked() {
@@ -1095,6 +1150,73 @@ class AppState extends ChangeNotifier {
     _changed();
   }
 
+  // =========================================================================
+  // Status sync with the ACAPS Risk Radar API
+  // =========================================================================
+  //
+  // The app has two kinds of risks, and they are saved differently:
+  //   * risks from the bundled CSV export: re-read from the CSV at every
+  //     start, never saved as a whole (custom == false);
+  //   * risks made in the app or imported from the API: saved in full on the
+  //     device under 'custom_risks' (custom == true).
+  // A status change on a custom risk is simply saved with it. For a CSV risk
+  // we save only the change ("R1037 is now Materialised") in _radarUpdates and
+  // replay it on top of the CSV at every start (see _restore). That keeps the
+  // CSV the single source for everything else, and Reset demo can undo the
+  // sync by forgetting the changes.
+  //
+  // Why status matters so much: it decides where a risk lives.
+  //   Active                         -> experts can answer (survey, forecast)
+  //   Materialised / Not materialised -> Archive: read-only, and the forecasts
+  //                                     experts gave are scored (Brier score)
+  //                                     against what really happened.
+
+  /// Status updates from the API for risks of the bundled export, by id:
+  /// {'status': ..., 'materialisation': ...}. Saved on the device and applied
+  /// on top of the export at every start; Reset demo clears them.
+  final Map<String, Map<String, String>> _radarUpdates = {};
+
+  /// Risks in the app whose status differs from the Risk Radar. Risks the API
+  /// does not list are left alone.
+  ///
+  /// Compared case- and space-insensitively ("Active " == "active"), because
+  /// the export and the API are not always typed the same way. Pure function:
+  /// changes nothing, so the screen can call it on every rebuild.
+  List<StatusChange> statusChanges(Iterable<Risk> fromApi) => [
+        for (final a in fromApi)
+          // Only risks the app has (`case final r?` = "if not null, call it r").
+          if (byId(a.id) case final r?)
+            if (a.status.trim().toLowerCase() != r.status.trim().toLowerCase())
+              StatusChange(r, a.status.trim(), a.materialisation),
+      ];
+
+  /// Applies the status changes. Answers given while a risk was active are
+  /// kept: once it closes they are the forecasts that get scored.
+  void applyStatusChanges(Iterable<StatusChange> changes) {
+    for (final c in changes) {
+      final i = risks.indexWhere((x) => x.id == c.risk.id);
+      if (i < 0) continue; // risk deleted meanwhile: nothing to update
+      // Keep our "what happened" text if the API has none.
+      final mat = c.materialisation.isEmpty ? null : c.materialisation;
+      risks[i] = risks[i].withStatus(c.to, materialisation: mat);
+      // CSV risks: remember the change so it survives a restart (see above).
+      if (!risks[i].custom) {
+        _radarUpdates[c.risk.id] = {'status': c.to, if (mat != null) 'materialisation': mat};
+      }
+    }
+    _changed(); // clears cached stats (scores change!), redraws, saves
+  }
+
+  /// Replays the saved status changes on top of the freshly loaded CSV.
+  /// Called from _restore, after the experts' answers are loaded.
+  void _applyRadarUpdates() {
+    for (var i = 0; i < risks.length; i++) {
+      final u = _radarUpdates[risks[i].id];
+      if (u == null || risks[i].custom) continue;
+      risks[i] = risks[i].withStatus(u['status']!, materialisation: u['materialisation']);
+    }
+  }
+
   /// Only risks created in the app can be deleted; Risk Radar risks stay.
   void deleteRisk(Risk r) {
     if (!r.custom) return;
@@ -1160,6 +1282,8 @@ class AppState extends ChangeNotifier {
       'Impact': r.impact,
       'Risk Level': r.level.isEmpty ? null : r.level,
       'Risk trend': r.trend.isEmpty ? null : r.trend,
+      'Expected exposure': r.exposure.isEmpty ? null : r.exposure,
+      'Expected priority needs': r.needs.isEmpty ? null : r.needs,
       'Status': r.status,
       // What this tool adds.
       'expert_input': {
@@ -1294,22 +1418,30 @@ class AppState extends ChangeNotifier {
       Expert(id: 'e9', realName: 'Omar Bashir', pseudonym: 'Atlas-77', level: Anonymity.pseudonymous,
           homeCountry: 'Sudan', interests: {'South Sudan'}, simulated: true, participation: 0.8, skill: 0.55),
       Expert(id: 'e10', realName: null, pseudonym: 'Monsoon-04', level: Anonymity.anonymous,
-          homeCountry: 'South Sudan', simulated: true, participation: 0.7, skill: 0.45),
+          homeCountry: 'South Sudan', simulated: true, participation: 0.7, skill: 0.45,
+          joinedVia: JoinedVia.expertReferral),
       Expert(id: 'e11', realName: 'Wanjiru Kamau', pseudonym: 'Compass-19', level: Anonymity.knownToAcaps,
           homeCountry: 'Kenya', interests: {'Sudan', 'Ethiopia'}, simulated: true, participation: 0.9, skill: 0.75),
       Expert(id: 'e12', realName: 'Aïssata Traoré', pseudonym: 'Cedar-66', level: Anonymity.pseudonymous,
-          homeCountry: 'Mali', interests: {'Niger'}, simulated: true, participation: 0.8, skill: 0.6),
+          homeCountry: 'Mali', interests: {'Niger'}, simulated: true, participation: 0.8, skill: 0.6,
+          joinedVia: JoinedVia.expertReferral),
       // Joined on 4 Nov through Harmattan-17's referral link; no answers yet.
       Expert(id: 'e13', realName: null, pseudonym: 'Rift-07', level: Anonymity.anonymous,
-          homeCountry: 'Kenya', simulated: true, participation: 0, skill: 0.5),
+          homeCountry: 'Kenya', simulated: true, participation: 0, skill: 0.5,
+          joinedVia: JoinedVia.expertReferral),
     ];
     _responses.clear();
     _skipped.clear();
     _seedInvites();
     _ensureReferralCodes(Random(7));
-    // Demo: two colleagues joined through Amina's (Harmattan-17) link: one
-    // has answered many risks, one has only just joined.
-    referrals = [Referral('p1', DateTime(2026, 10, 20), 'e12'), Referral('p1', DateTime(2026, 11, 4), 'e13')];
+    // Demo: three colleagues joined through Amina's (Harmattan-17) link, so
+    // she is a Referral Master: two have answered many risks, one has only
+    // just joined.
+    referrals = [
+      Referral('p1', DateTime(2026, 10, 20), 'e12'),
+      Referral('p1', DateTime(2026, 10, 28), 'e10'),
+      Referral('p1', DateTime(2026, 11, 4), 'e13'),
+    ];
     final t1 = 'R1043 - T0618', t2 = 'R1043 - T0619', t3 = 'R1043 - T0620';
     comments = [
       Comment(id: 's1', riskId: 'R1043', itemId: t1, authorId: 'e6',
@@ -1365,6 +1497,7 @@ class AppState extends ChangeNotifier {
         'responses': [for (final r in _responses.values) r.toJson()],
         'comments': [for (final c in comments) c.toJson()],
         'custom_risks': [for (final r in risks.where((r) => r.custom)) r.toJson()],
+        'radar_updates': _radarUpdates, // statuses synced from the ACAPS API (CSV risks only)
         'skipped': {for (final e in _skipped.entries) e.key: e.value.toList()},
         'invite': invitePanel,
         'invite_code': pendingInviteCode,
@@ -1413,6 +1546,17 @@ class AppState extends ChangeNotifier {
       risks
         ..removeWhere((r) => r.custom)
         ..addAll([for (final r in (m['custom_risks'] as List? ?? const [])) Risk.fromJson((r as Map).cast<String, dynamic>())]);
+      // After the responses: answers given while a risk was still active stay.
+      // (The loop above drops answers on risks that are closed *in the CSV*;
+      // a risk closed later by a sync must keep its answers, because those are
+      // exactly the forecasts we now score. So the sync is replayed only now.)
+      _radarUpdates
+        ..clear()
+        ..addAll({
+          for (final e in ((m['radar_updates'] as Map?) ?? const {}).entries)
+            e.key as String: (e.value as Map).cast<String, String>(),
+        });
+      _applyRadarUpdates();
       return true;
     } catch (_) {
       return false; // corrupt or old state: start fresh
