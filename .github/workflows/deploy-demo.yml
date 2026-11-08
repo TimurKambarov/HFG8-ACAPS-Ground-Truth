@@ -40,19 +40,35 @@ jobs:
     defaults:
       run:
         working-directory: app
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
     steps:
+      # Pasted secrets often end with a line break, which breaks the build
+      # command, so spaces and line breaks are removed (neither value can
+      # contain them). The cleaned values go to the next steps as GT_*.
       - name: Check the Supabase secrets
         working-directory: .
+        env:
+          RAW_URL: ${{ secrets.SUPABASE_URL }}
+          RAW_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
         run: |
-          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_PUBLISHABLE_KEY" ]; then
+          url=$(printf '%s' "$RAW_URL" | tr -d '[:space:]')
+          key=$(printf '%s' "$RAW_KEY" | tr -d '[:space:]')
+          if [ -z "$url" ] || [ -z "$key" ]; then
             echo "::error::Add the repository secrets SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY (see the top of this file)."
             exit 1
           fi
+          case "$url" in
+            https://*) ;;
+            *) echo "::error::SUPABASE_URL must be only the URL, starting with https:// (no 'SUPABASE_URL=' in front)."; exit 1 ;;
+          esac
+          case "$key" in
+            SUPABASE_*) echo "::error::SUPABASE_PUBLISHABLE_KEY must be only the key, without 'SUPABASE_PUBLISHABLE_KEY=' in front."; exit 1 ;;
+          esac
+          echo "::add-mask::$url"
+          echo "::add-mask::$key"
+          echo "GT_SUPABASE_URL=$url" >> "$GITHUB_ENV"
+          echo "GT_SUPABASE_KEY=$key" >> "$GITHUB_ENV"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: subosito/flutter-action@v2
         with:
@@ -69,8 +85,8 @@ jobs:
         run: >
           flutter build web --release
           --base-href "/${{ github.event.repository.name }}/"
-          --dart-define=SUPABASE_URL="$SUPABASE_URL"
-          --dart-define=SUPABASE_PUBLISHABLE_KEY="$SUPABASE_PUBLISHABLE_KEY"
+          --dart-define=SUPABASE_URL="$GT_SUPABASE_URL"
+          --dart-define=SUPABASE_PUBLISHABLE_KEY="$GT_SUPABASE_KEY"
 
       # Pages serves 404.html for unknown paths: send those to the app too.
       - run: cp build/web/index.html build/web/404.html
