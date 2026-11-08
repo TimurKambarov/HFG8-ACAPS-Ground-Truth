@@ -1,0 +1,72 @@
+# Live demo: builds the Flutter web app in app/ and publishes it on GitHub Pages
+# at https://<owner>.github.io/HFG8-ACAPS-Ground-Truth/ on every push to main.
+#
+# One-time setup by the repository owner:
+#   Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
+# It can also be started by hand: Actions -> "Deploy live demo" -> Run workflow.
+#
+# The demo needs no backend: data is the bundled Risk Radar export and every
+# visitor's answers stay in their own browser. The ACAPS API login is passed
+# as empty values, so no credentials end up in the public JavaScript; Import
+# and Sync statuses only work from a laptop with the local proxy.
+
+name: Deploy live demo
+
+on:
+  push:
+    branches: [main]
+    paths: ['app/**', '.github/workflows/deploy-demo.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push replaces a queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.9
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Build web app
+        run: >
+          flutter build web --release
+          --base-href "/${{ github.event.repository.name }}/"
+          --dart-define=ACAPS_EMAIL=
+          --dart-define=ACAPS_PASSWORD=
+
+      # Pages serves 404.html for unknown paths: send those to the app too.
+      - run: cp build/web/index.html build/web/404.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
