@@ -18,8 +18,9 @@
    It reads `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `ACAPS_EMAIL` and `ACAPS_PASSWORD` from the
    environment or from the git-ignored `API.key` file. It writes only what changed (an up-to-date
    database is left untouched) and deletes risks the API no longer lists (`--keep-removed` keeps them).
-   `app-mobile` reads these tables and nothing else. The older `python scripts/load_risks_to_supabase.py`
-   loads the CSV export instead; don't use it any more, because it would bring back risks that ACAPS has removed.
+   The app reads these tables and nothing else. After setup, the **Weekly risk sync** GitHub Action
+   ([`../.github/workflows/weekly-risk-sync.yml`](../.github/workflows/weekly-risk-sync.yml)) runs the same
+   script every Monday; it needs the four values above as repository secrets.
 4. **Make a moderator.** Start the app with real accounts (`./app/run.ps1`, see [`app/README.md`](../app/README.md)),
    tap *I have a code* and enter the moderator code `GT-ACAPS-MOD1`. **Authentication → Users → Add user** no longer works, because
    sign-up requires an invite code.
@@ -101,9 +102,8 @@ app warns about it.
 ## Reading the data for modelling (Python)
 
 ```python
-import requests
-from scripts.load_risks_to_supabase import credentials
-url, key = credentials()
+import os, requests
+url, key = os.environ["SUPABASE_URL"], os.environ["SUPABASE_SECRET_KEY"]
 h = {"apikey": key, "Authorization": f"Bearer {key}"}
 risks = requests.get(f"{url}/rest/v1/risks", params={"select": "*"}, headers=h).json()
 scores = requests.get(f"{url}/rest/v1/forecast_scores", params={"select": "*"}, headers=h).json()

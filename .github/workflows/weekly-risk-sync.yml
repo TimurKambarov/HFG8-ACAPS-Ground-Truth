@@ -1,0 +1,66 @@
+# Weekly risk sync: copies the live ACAPS Risk Radar into Supabase with
+# scripts/sync_risks.dart, so the app shows new risks and moves closed ones to
+# the Archive without anyone running the script by hand.
+#
+# Runs every Monday at 06:00 UTC. It can also be started by hand:
+# Actions -> "Weekly risk sync" -> Run workflow (tick "dry run" to only compare).
+# The script writes only what changed; an up-to-date database is left alone.
+#
+# One-time setup: Settings -> Secrets and variables -> Actions -> New repository
+# secret, one for each:
+#   SUPABASE_URL          (already there for the live demo)
+#   SUPABASE_SECRET_KEY   the sb_secret_... key: bypasses row level security,
+#                         so it lives ONLY here and in API.key, never in the app
+#   ACAPS_EMAIL           the ACAPS API account
+#   ACAPS_PASSWORD
+
+name: Weekly risk sync
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: fetch and compare only, write nothing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never two syncs at the same time.
+concurrency:
+  group: risk-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      ACAPS_EMAIL: ${{ secrets.ACAPS_EMAIL }}
+      ACAPS_PASSWORD: ${{ secrets.ACAPS_PASSWORD }}
+    steps:
+      - name: Check the secrets
+        run: |
+          missing=""
+          for k in SUPABASE_URL SUPABASE_SECRET_KEY ACAPS_EMAIL ACAPS_PASSWORD; do
+            [ -z "$(printenv "$k" | tr -d '[:space:]')" ] && missing="$missing $k"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Add the repository secrets:$missing (see the top of this file)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+
+      # Plain Dart, no packages: the script only uses dart:io.
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Sync ACAPS Risk Radar -> Supabase
+        run: dart run scripts/sync_risks.dart ${{ inputs.dry_run && '--dry-run' || '' }}
