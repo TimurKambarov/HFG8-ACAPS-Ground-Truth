@@ -1,7 +1,7 @@
 # Auth Lab
 
 A small Flutter app (Android and web) for testing invite codes, sign-up and login against the real Supabase project.
-It is separate from `app/` and `app-mobile/`. Use synthetic names only.
+It is separate from `app/`. Use synthetic names only.
 
 ## What it tests
 

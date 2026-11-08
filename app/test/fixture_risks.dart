@@ -4,7 +4,7 @@
 //
 // Refresh the snapshot after a sync with, from the repo root:
 //   curl "$SUPABASE_URL/rest/v1/risks?select=<columns in lib/risk_source.dart>&order=risk_id" \
-//     -H "apikey: $SUPABASE_PUBLISHABLE_KEY" > app-mobile/test/fixtures/risks.json
+//     -H "apikey: $SUPABASE_PUBLISHABLE_KEY" > app/test/fixtures/risks.json
 
 import 'dart:convert';
 import 'dart:io';

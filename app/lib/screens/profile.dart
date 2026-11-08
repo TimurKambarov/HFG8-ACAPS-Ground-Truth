@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../brand.dart';
 import '../models.dart';
 import '../store.dart';
+import '../theme.dart';
 import '../widgets.dart';
 import 'home.dart' show AwardIcon;
 
@@ -93,28 +95,35 @@ class _ProfileTabState extends State<ProfileTab> {
         final a = me.level;
         final name = displayName(me, appState.viewer);
 
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-          children: [
-            Row(
-              children: [
-                Avatar(name, size: 56),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(name, style: t.titleLarge),
-                      const SizedBox(height: 6),
-                      Wrap(spacing: 6, runSpacing: 6, children: [
-                        Pill('Level ${a.number}', icon: anonymityIcon(a)),
-                        Pill(me.homeCountry, icon: Icons.place_outlined),
-                      ]),
-                    ],
+        return BrandPage(
+          header: BrandHeader(
+            eyebrow: 'Your profile',
+            title: name,
+            seed: 41,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: AppColors.tealBright, width: 2)),
+                    padding: const EdgeInsets.all(2),
+                    child: Avatar(name, size: 52),
                   ),
-                ),
-              ],
-            ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _HeaderFact(icon: anonymityIcon(a), text: 'Level ${a.number}: ${a.label}'),
+                        const SizedBox(height: 4),
+                        _HeaderFact(icon: Icons.place_outlined, text: me.homeCountry),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          children: [
 
             // Forecasts and comment feedback live in the My forecasts tab.
 
@@ -248,6 +257,22 @@ class _ProfileTabState extends State<ProfileTab> {
   }
 }
 
+/// One white icon + text line in the navy profile header.
+class _HeaderFact extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _HeaderFact({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Icon(icon, size: 17, color: AppColors.tealBright),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: TextStyle(fontSize: 15, color: Colors.white.withAlpha(235)))),
+        ],
+      );
+}
+
 /// The expert's own permanent referral code: colleagues they trust can join
 /// the closed group with it. One code per expert, any number of colleagues.
 /// There is no installed app yet, so the colleague types the code on the
@@ -282,17 +307,22 @@ class _ReferralCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Your referral code', style: t.titleSmall),
+            const Eyebrow('Grow the network'),
+            const SizedBox(height: 4),
+            Text('Your referral code', style: t.titleMedium),
             const SizedBox(height: 4),
             Text('Share it with experts you trust: they type it in the app to join the group. '
                 'It is permanent and works for any number of colleagues.', style: t.bodySmall),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest.withAlpha(140),
+                border: Border(left: BorderSide(color: cs.brightness == Brightness.light ? AppColors.teal : cs.primary, width: 3)),
+              ),
               child: Row(
                 children: [
-                  Icon(Icons.vpn_key_outlined, color: cs.primary),
+                  Icon(Icons.vpn_key_outlined, color: cs.brightness == Brightness.light ? AppColors.teal : cs.primary),
                   const SizedBox(width: 10),
                   Expanded(
                     child: code.isEmpty

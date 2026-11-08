@@ -20,3 +20,20 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   # No bundled risks: they come from Supabase (synced from the ACAPS Risk Radar API).
+  # The two typefaces of acaps.org, Latin subsets (~120 KB): bundled, so the
+  # app never fetches fonts over a weak connection. See assets/fonts/README.md.
+  fonts:
+    - family: BebasNeue
+      fonts:
+        - asset: assets/fonts/BebasNeue-Regular.ttf
+    - family: RobotoCondensed
+      fonts:
+        - asset: assets/fonts/RobotoCondensed-Regular.ttf
+        - asset: assets/fonts/RobotoCondensed-Bold.ttf
+          weight: 700
+    # Arrows (← ↑ → ↓) only, ~2 KB: missing from the Latin subsets above.
+    - family: Arrows
+      fonts:
+        - asset: assets/fonts/Arrows-400.ttf
+        - asset: assets/fonts/Arrows-700.ttf
+          weight: 700

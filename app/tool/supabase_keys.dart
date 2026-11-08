@@ -3,9 +3,9 @@
 // SUPABASE_PUBLISHABLE_KEY, read from the git-ignored ../API.key.
 // The secret key in that file is never copied.
 //
-// VS Code runs this before the app-mobile launch configurations
+// VS Code runs this before the app launch configurations
 // (.vscode/tasks.json). By hand:
-//   cd app-mobile
+//   cd app
 //   dart run tool/supabase_keys.dart
 //   flutter run --dart-define-from-file=.dart_tool/supabase_keys.json
 //
@@ -32,5 +32,5 @@ void main() {
   out.writeAsStringSync(jsonEncode(keys));
   stdout.writeln(keys.length == wanted.length
       ? 'Supabase keys ready: ${out.path}'
-      : 'API.key not found or incomplete: app-mobile starts without Supabase (${out.path}).');
+      : 'API.key not found or incomplete: the app starts without Supabase (${out.path}).');
 }

@@ -3,35 +3,15 @@
   "version": "2.0.0",
   "tasks": [
     {
-      // app-mobile: writes app-mobile/.dart_tool/supabase_keys.json with only
-      // SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY from API.key (see
-      // app-mobile/tool/supabase_keys.dart). Without API.key it writes {}.
-      "label": "Supabase keys (app-mobile)",
+      // Writes app/.dart_tool/supabase_keys.json with only SUPABASE_URL and
+      // SUPABASE_PUBLISHABLE_KEY from API.key (see app/tool/supabase_keys.dart).
+      // Without API.key it writes {}.
+      "label": "Supabase keys (app)",
       "type": "shell",
       "command": "dart run tool/supabase_keys.dart",
-      "options": { "cwd": "${workspaceFolder}/app-mobile" },
+      "options": { "cwd": "${workspaceFolder}/app" },
       "presentation": { "reveal": "silent" },
       "problemMatcher": []
-    },
-    {
-      // CORS proxy for the ACAPS API, needed by "Import" in the web build.
-      // Starts once and keeps running; if port 8787 is already taken
-      // (proxy started by hand), the task fails but the running proxy still works.
-      "label": "ACAPS API proxy",
-      "type": "shell",
-      "command": "dart run tool/acaps_proxy.dart",
-      "options": { "cwd": "${workspaceFolder}/app" },
-      "isBackground": true,
-      "presentation": { "reveal": "silent", "panel": "dedicated" },
-      "problemMatcher": {
-        "owner": "acaps-proxy",
-        "pattern": { "regexp": "^__never__$" },
-        "background": {
-          "activatesForAllTasks": true,
-          "beginsPattern": ".",
-          "endsPattern": "ACAPS API proxy on|Proxy error|SocketException"
-        }
-      }
     }
   ]
 }

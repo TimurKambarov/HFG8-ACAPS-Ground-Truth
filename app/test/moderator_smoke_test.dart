@@ -285,6 +285,9 @@ void main() {
     expect(find.text('Your profile'), findsNothing);
 
     // Log in: existing members only, no way to create a profile without a code.
+    // (Below the hero and key figures: scroll to it, as on a phone.)
+    await tester.ensureVisible(find.text('Log in'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Log in'));
     await tester.pumpAndSettle();
     expect(find.text('Harmattan-17'), findsOneWidget);

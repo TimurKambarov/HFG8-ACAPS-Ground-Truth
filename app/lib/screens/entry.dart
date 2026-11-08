@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show TextInput;
 
 import '../auth.dart';
+import '../brand.dart';
 import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
@@ -85,72 +86,72 @@ class _InviteScreenState extends State<InviteScreen> {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
     final demo = !Auth.ready;
     return Scaffold(
       body: ListView(
         padding: EdgeInsets.zero,
         children: [
           const _Hero(subtitle: 'A trusted, closed network of humanitarian experts. A few minutes a week to ground-truth ACAPS risk analysis.'),
+          // Key figures strip, as on the website's data blocks.
+          const _KeyFacts(),
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Center(
-                  child: Container(
-                    width: 150,
-                    height: 150,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: cs.primary, width: 3),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Icon(Icons.vpn_key_outlined, size: 100, color: cs.primary),
+                EdgeCard(
+                  edge: AppColors.teal,
+                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Eyebrow('New member'),
+                      const SizedBox(height: 6),
+                      Text('Join with the code you received', style: t.titleMedium),
+                      const SizedBox(height: 6),
+                      Text('A personal invite code from ACAPS (works once), or the referral code of a colleague in the group.',
+                          style: t.bodySmall),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _code,
+                        textCapitalization: TextCapitalization.characters,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        textInputAction: TextInputAction.go,
+                        onSubmitted: (_) => _submit(),
+                        onChanged: (_) {
+                          if (_error != null) setState(() => _error = null);
+                        },
+                        style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w700, letterSpacing: 1),
+                        decoration: InputDecoration(
+                          labelText: 'I have a code',
+                          hintText: 'GT-XXXX-XXXX or REF-XXXX-XXXX',
+                          prefixIcon: const Icon(Icons.vpn_key_outlined),
+                          errorText: _error,
+                          errorMaxLines: 4,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      FilledButton.icon(
+                        onPressed: _busy ? null : _submit,
+                        icon: _busy
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.5))
+                            : const Icon(Icons.arrow_forward),
+                        label: const Text('Continue'),
+                      ),
+                      if (demo) ...[
+                        const SizedBox(height: 4),
+                        TextButton.icon(
+                          onPressed: _busy ? null : _useDemoCode,
+                          icon: const Icon(Icons.person_add_alt, size: 18),
+                          label: const Text('Register with a demo code'),
+                        ),
+                        Text('Demo: codes are kept on this device. Start with run.ps1 for real accounts.',
+                            textAlign: TextAlign.center, style: t.bodySmall),
+                      ],
+                    ],
                   ),
                 ),
-                const SizedBox(height: 16),
-                Text('Join with the code you received', textAlign: TextAlign.center, style: t.titleMedium),
-                const SizedBox(height: 6),
-                Text('A personal invite code from ACAPS (works once), or the referral code of a colleague in the group.',
-                    textAlign: TextAlign.center, style: t.bodySmall),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _code,
-                  textCapitalization: TextCapitalization.characters,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  textInputAction: TextInputAction.go,
-                  onSubmitted: (_) => _submit(),
-                  onChanged: (_) {
-                    if (_error != null) setState(() => _error = null);
-                  },
-                  style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w700, letterSpacing: 1),
-                  decoration: InputDecoration(
-                    labelText: 'I have a code',
-                    hintText: 'GT-XXXX-XXXX or REF-XXXX-XXXX',
-                    prefixIcon: const Icon(Icons.vpn_key_outlined),
-                    errorText: _error,
-                    errorMaxLines: 4,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: _busy ? null : _submit,
-                  icon: _busy
-                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.5))
-                      : const Icon(Icons.arrow_forward),
-                  label: const Text('Continue'),
-                ),
-                if (demo) ...[
-                  const SizedBox(height: 4),
-                  TextButton.icon(
-                    onPressed: _busy ? null : _useDemoCode,
-                    icon: const Icon(Icons.person_add_alt, size: 18),
-                    label: const Text('Register with a demo code'),
-                  ),
-                  Text('Demo: codes are kept on this device. Start with run.ps1 for real accounts.',
-                      textAlign: TextAlign.center, style: t.bodySmall),
-                ],
                 const SizedBox(height: 24),
                 Row(
                   children: [
@@ -175,6 +176,28 @@ class _InviteScreenState extends State<InviteScreen> {
   }
 }
 
+/// Three facts about taking part, as big numbers.
+class _KeyFacts extends StatelessWidget {
+  const _KeyFacts();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Theme.of(context).colorScheme.surfaceContainerLowest,
+      padding: const EdgeInsets.fromLTRB(12, 18, 12, 16),
+      margin: const EdgeInsets.only(bottom: 12),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: KeyFigure(value: '2', label: 'minutes per risk')),
+          Expanded(child: KeyFigure(value: '6', label: 'month forecast window')),
+          Expanded(child: KeyFigure(value: '3', label: 'levels of anonymity')),
+        ],
+      ),
+    );
+  }
+}
+
 /// Demo mode: log in as an existing member by picking a synthetic demo user
 /// or a moderator (no passwords). With real accounts, [LoginScreen] is used.
 class SignInScreen extends StatelessWidget {
@@ -190,7 +213,7 @@ class SignInScreen extends StatelessWidget {
       body: ListView(
         padding: EdgeInsets.zero,
         children: [
-          const _Hero(subtitle: 'Log in'),
+          const _Hero(subtitle: 'Log in', compact: true),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
             child: Column(
@@ -232,8 +255,9 @@ class SignInScreen extends StatelessWidget {
                     child: Card(
                       child: ListTile(
                         leading: CircleAvatar(
-                          backgroundColor: cs.tertiary.withAlpha(50),
-                          child: Icon(Icons.admin_panel_settings_outlined, color: cs.onSurface),
+                          backgroundColor: cs.brightness == Brightness.light ? AppColors.navy : cs.primaryContainer,
+                          child: Icon(Icons.admin_panel_settings_outlined,
+                              color: cs.brightness == Brightness.light ? Colors.white : cs.onPrimaryContainer),
                         ),
                         title: Text(m.name, style: const TextStyle(fontWeight: FontWeight.w700)),
                         subtitle: const Text('ACAPS moderator'),
@@ -701,38 +725,28 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
+/// Navy hero with contour lines and the large pin, like the ACAPS website's
+/// navy bands.
 class _Hero extends StatelessWidget {
   final String subtitle;
-  const _Hero({required this.subtitle});
+  final bool compact;
+  const _Hero({required this.subtitle, this.compact = false});
 
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    return Container(
-      padding: EdgeInsets.fromLTRB(24, MediaQuery.paddingOf(context).top + 36, 24, 28),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [AppColors.primary, AppColors.ink]),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.radar, color: Colors.white, size: 34),
-              const Spacer(),
-              IconButton(
-                tooltip: 'Theme and text size',
-                onPressed: () => showDisplaySettings(context),
-                icon: const Icon(Icons.text_fields, color: Colors.white),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text('Ground Truth', style: t.headlineMedium?.copyWith(color: Colors.white)),
-          const SizedBox(height: 8),
-          Text(subtitle, style: t.bodyLarge?.copyWith(color: Colors.white.withAlpha(220), height: 1.4)),
-        ],
-      ),
+    return BrandHeader(
+      eyebrow: 'ACAPS · Expert network',
+      title: 'Ground Truth',
+      titleSize: compact ? 46 : 60,
+      subtitle: subtitle,
+      seed: compact ? 7 : 3,
+      actions: [
+        IconButton(
+          tooltip: 'Theme and text size',
+          onPressed: () => showDisplaySettings(context),
+          icon: const Icon(Icons.text_fields),
+        ),
+      ],
     );
   }
 }

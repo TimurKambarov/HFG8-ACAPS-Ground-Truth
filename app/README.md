@@ -1,29 +1,35 @@
-# Ground Truth: phone version
+# Ground Truth: phone app
 
-The phone version of [`../app`](../app/README.md). It has the same features: sign-up with an invite or referral
-code, log in, referral codes and progress, moderator invites, search and filters, the survey, group view, rating and
-the expert-input export. The full flow is described in `../app/README.md`.
+The Ground Truth app for experts and ACAPS moderators, built for **Android and iOS phones**. Features: sign-up
+with an invite or referral code, log in, referral codes and progress, moderator invites, search and filters, the
+survey, group view, rating and the expert-input export. The full expert and moderator flow is described in the
+README of the earlier browser build (`git show origin/app-auth-api:app/README.md`).
 
-What is different from `../app`:
+This folder combines two branches:
 
-- **Risks come from the ACAPS Risk Radar API, not from the CSV in this repo.** The app reads the Supabase `risks`
-  table, which [`../scripts/sync_risks.dart`](../scripts/sync_risks.dart) keeps equal to the live API (see *Risks*
-  below). There is no bundled CSV.
-- **No Import, Sync statuses or New risk for moderators.** Risks are ACAPS's own and arrive through the sync.
+- **Functionality from `app-auth-api`** (the former `app-mobile/` folder): Supabase accounts, invite and referral
+  codes, and ACAPS risks read from the Supabase `risks` table.
+- **Design from `test-design-last-hope-DONT-MERGE`**: the acaps.org look (`lib/brand.dart`, `lib/theme.dart`,
+  `lib/widgets.dart`, bundled fonts in `assets/fonts/`), with navy page headers, contour lines and key figures.
+
+How it differs from the earlier browser build:
+
+- **Risks come from the ACAPS Risk Radar API, not from a CSV.** The app reads the Supabase `risks` table, which
+  [`../scripts/sync_risks.dart`](../scripts/sync_risks.dart) keeps equal to the live API (see *Risks* below).
   The Risks tab shows where they come from (`ACAPS Risk Radar · 137 risks · updated 7 Nov 2026`) and a
-  *Refresh* button. Experts see the same line on their Risks tab.
-- **Demo risk R1055** (mass returns from eastern Chad to West Darfur) instead of R1043: R1043 is no longer in the
-  Risk Radar API. R1055 has the same storyline (the panel moved from Medium to High over the last month), and
-  the seeded comments are about its triggers.
-- Phone tweaks: portrait only; a **Who?** chip (experts) and *tap for countries* (moderators) open a sheet with
+  *Refresh* button.
+- **No Import, Sync statuses or New risk for moderators.** Risks are ACAPS's own and arrive through the sync.
+- **Demo risk R1055** (mass returns from eastern Chad to West Darfur) instead of R1043, which is no longer in the
+  Risk Radar API. R1055 has the same storyline (the panel moved from Medium to High over the last month).
+- Phone details: portrait only; a **Who?** chip (experts) and *tap for countries* (moderators) open a sheet with
   where agreeing / disagreeing experts come from, since phones have no hover; a light vibration when picking 1–5;
   the rating scope is a row of chips that scrolls sideways; the country search stays above the keyboard.
-- Android app name "Ground Truth", application ID `com.example.ground_truth.mobile`, so it installs next to `../app`.
+- Android app name "Ground Truth", application ID `com.example.ground_truth.mobile`.
 
 ## Risks
 
 ```
-ACAPS Risk Radar API --(scripts/sync_risks.dart, secret key)--> Supabase `risks` --(read only)--> app-mobile
+ACAPS Risk Radar API --(scripts/sync_risks.dart, secret key)--> Supabase `risks` --(read only)--> app
 ```
 
 - The app **never calls the ACAPS API and never writes risks.** It reads `risks` with the publishable key at every
@@ -44,10 +50,10 @@ Requires the [Flutter SDK](https://docs.flutter.dev/get-started/install) (3.22 o
 `../API.key` with `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`.
 
 ```powershell
-./app-mobile/run.ps1 -Device <device-id>    # passes only the URL and the publishable key, never the secret key
+./app/run.ps1 -Device <device-id>    # passes only the URL and the publishable key, never the secret key
 ```
 
-In VS Code, *Run and Debug* → **app-mobile (phone)** or **app-mobile (Edge)** does the same: a pre-launch task
+In VS Code, *Run and Debug* → **app (phone)** or **app (Edge, dev only)** does the same: a pre-launch task
 writes `.dart_tool/supabase_keys.json` with only those two values (`tool/supabase_keys.dart`).
 
 - **First moderator:** *I have a code* → `GT-ACAPS-MOD1` → name, work email, password.
@@ -61,7 +67,7 @@ device saved a copy before.
 ### Android phone (wireless debugging)
 
 Needs the Android SDK. Pair the phone once via *Developer options → Wireless debugging*, then
-`flutter devices` shows it (e.g. "SM A366B (wireless)") and `./app-mobile/run.ps1 -Device <device-id>` runs on it.
+`flutter devices` shows it (e.g. "SM A366B (wireless)") and `./app/run.ps1 -Device <device-id>` runs on it.
 The first Android build downloads Gradle and takes a few minutes.
 
 Without the Android SDK: `flutter run -d web-server --web-hostname 0.0.0.0 --web-port 8080 --dart-define-from-file=.dart_tool/supabase_keys.json`,
@@ -70,7 +76,7 @@ then open `http://<this computer's IP>:8080` on a phone on the same Wi-Fi.
 ## Tests
 
 ```bash
-cd app-mobile
+cd app
 flutter test                          # uses test/fixtures/risks.json, a snapshot of the synced risks table
 dart run tool/identity_check.dart     # anonymity rules, without the Flutter test device
 ```

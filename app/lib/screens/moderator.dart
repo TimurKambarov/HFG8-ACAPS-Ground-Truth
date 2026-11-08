@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../auth.dart';
 import '../models.dart';
 import '../store.dart';
+import '../brand.dart';
 import '../download.dart';
 import '../theme.dart';
 import '../widgets.dart';
@@ -131,13 +132,19 @@ class _ModeratorShellState extends State<ModeratorShell> {
           ],
         );
 
+        final plain = Theme.of(context).colorScheme.outlineVariant == Colors.white; // high contrast
         return Scaffold(
+          // Navy console bar with contour lines, like the website's navy bands.
           appBar: AppBar(
+            backgroundColor: plain ? Colors.black : (Theme.of(context).brightness == Brightness.light ? AppColors.navy : AppColors.navyNight),
+            foregroundColor: Colors.white,
+            shape: plain ? const Border(bottom: BorderSide(color: Colors.white, width: 2)) : const Border(),
+            flexibleSpace: TopoLines(color: Colors.white.withAlpha(26), seed: 17, scale: 120),
             title: const Row(
               children: [
-                Icon(Icons.admin_panel_settings_outlined),
-                SizedBox(width: 8),
-                Flexible(child: Text('ACAPS moderator', style: TextStyle(fontWeight: FontWeight.w800))),
+                PinMark(height: 24, color: AppColors.tealBright, dotColor: Colors.white),
+                SizedBox(width: 10),
+                Flexible(child: Text('ACAPS moderator', style: TextStyle(color: Colors.white))),
               ],
             ),
             actions: [
@@ -495,7 +502,7 @@ class _InviteSheetState extends State<_InviteSheet> {
               // lets that one person create a profile.
               Container(
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(12)),
+                decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(4)),
                 child: Row(
                   children: [
                     Icon(Icons.vpn_key_outlined, color: cs.primary),
@@ -633,7 +640,7 @@ class _CountPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(10)),
+        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
         child: Text(text,
             style: TextStyle(
                 color: ThemeData.estimateBrightnessForColor(color) == Brightness.dark ? Colors.white : Colors.black,
@@ -662,7 +669,7 @@ class _GapLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final up = gap > 0.25, down = gap < -0.25;
-    final color = up ? AppColors.high : (down ? AppColors.low : Theme.of(context).colorScheme.onSurfaceVariant);
+    final color = up ? readable(AppColors.red) : (down ? readable(AppColors.green) : Theme.of(context).colorScheme.onSurfaceVariant);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -829,17 +836,18 @@ class _SplitPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = agreementColors[Agreement.partly]!;
+    final fg = readable(c);
     return Tooltip(
       message: 'Experts disagree among themselves: no clear group view. This part of the analysis may need attention.',
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        decoration: BoxDecoration(color: c.withAlpha(40), borderRadius: BorderRadius.circular(10), border: Border.all(color: c)),
+        decoration: BoxDecoration(color: c.withAlpha(40), borderRadius: BorderRadius.circular(4), border: Border.all(color: c)),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.call_split, size: 13, color: c),
+            Icon(Icons.call_split, size: 13, color: fg),
             const SizedBox(width: 3),
-            Text('experts split', style: TextStyle(color: c, fontSize: 11.5, fontWeight: FontWeight.w800)),
+            Text('experts split', style: TextStyle(color: fg, fontSize: 11.5, fontWeight: FontWeight.w800)),
           ],
         ),
       ),
@@ -869,7 +877,7 @@ class _ModRiskTile extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 5),
       color: selected ? cs.primary.withAlpha(28) : null,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(4),
         side: BorderSide(color: selected ? cs.primary : cs.outlineVariant, width: selected ? 2 : 1),
       ),
       clipBehavior: Clip.antiAlias,
@@ -882,12 +890,7 @@ class _ModRiskTile extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Expanded(
-                    child: Text('${risk.id} · ${risk.country}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: cs.onSurfaceVariant)),
-                  ),
+                  Expanded(child: Eyebrow('${risk.id} · ${risk.country}')),
                   LevelBadge(risk.level),
                 ],
               ),
@@ -964,7 +967,7 @@ class ModRiskDetail extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
                   decoration: BoxDecoration(
                     color: cs.error.withAlpha(20),
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(4),
                     border: Border.all(color: cs.error.withAlpha(90)),
                   ),
                   child: Row(
@@ -1112,7 +1115,7 @@ class _Fact extends StatelessWidget {
     return Container(
       constraints: const BoxConstraints(minWidth: 120, maxWidth: 360),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(10)),
+      decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(140), borderRadius: BorderRadius.circular(4)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -1401,7 +1404,7 @@ class _ReviewListState extends State<_ReviewList> {
             margin: const EdgeInsets.symmetric(vertical: 4),
             color: r.id == widget.selectedId ? cs.primary.withAlpha(28) : null,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(4),
               side: BorderSide(color: r.id == widget.selectedId ? cs.primary : cs.outlineVariant, width: r.id == widget.selectedId ? 2 : 1),
             ),
             child: ListTile(
@@ -1494,7 +1497,7 @@ class _ModRiskReviewState extends State<ModRiskReview> {
           padding: const EdgeInsets.fromLTRB(14, 12, 8, 8),
           decoration: BoxDecoration(
             color: levelColor(r.level).withAlpha(Theme.of(context).brightness == Brightness.dark ? 45 : 26),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(4),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1544,7 +1547,7 @@ class _ModRiskReviewState extends State<ModRiskReview> {
             padding: const EdgeInsets.symmetric(horizontal: 8),
             decoration: BoxDecoration(
               color: items[i].id == widget.focusTrigger ? cs.primary.withAlpha(22) : null,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(4),
             ),
             child: QuestionHeader(number: i + 1, total: items.length, title: items[i].title),
           ),
@@ -1677,7 +1680,7 @@ class _ModComment extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: cs.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(4),
         border: Border.all(color: pending ? cs.primary.withAlpha(180) : cs.outlineVariant, width: pending ? 1.5 : 1),
       ),
       child: Column(
@@ -1912,7 +1915,7 @@ class _PublishSheetState extends State<_PublishSheet> {
           if (_credits && n >= minPanel)
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(120), borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(120), borderRadius: BorderRadius.circular(4)),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2257,7 +2260,7 @@ void _showExpert(BuildContext context, Expert e) {
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: cs.surfaceContainerHighest, borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(color: cs.surfaceContainerHighest, borderRadius: BorderRadius.circular(4)),
               child: SelectableText(
                 const JsonEncoder.withIndent('  ').convert(e.toJson()),
                 style: const TextStyle(fontFamily: 'monospace', fontSize: 12, height: 1.35),
