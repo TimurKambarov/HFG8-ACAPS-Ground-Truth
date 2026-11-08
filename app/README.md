@@ -73,6 +73,18 @@ The first Android build downloads Gradle and takes a few minutes.
 Without the Android SDK: `flutter run -d web-server --web-hostname 0.0.0.0 --web-port 8080 --dart-define-from-file=.dart_tool/supabase_keys.json`,
 then open `http://<this computer's IP>:8080` on a phone on the same Wi-Fi.
 
+### Web and the live demo
+
+The web build is the same phone app. [`web/index.html`](web/index.html) decides at load time how to show it: on a
+phone or narrow window it fills the page; on a wide screen (at least 720 × 700) it runs **inside a phone frame**,
+390 points wide, so it lays itself out exactly as on a phone. In the frame, Flutter draws into an element of the
+page instead of the whole page (`hostElement` in [`web/flutter_bootstrap.js`](web/flutter_bootstrap.js)).
+`?frame=off` in the address turns the frame off. *app (Edge, dev only)* shows the frame too.
+
+The live demo on GitHub Pages is built by [`../.github/workflows/deploy-demo.yml`](../.github/workflows/deploy-demo.yml)
+on every push to `main` that changes `app/`, with the same two Supabase values as `run.ps1` (repository secrets
+`SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`; setup steps at the top of that file).
+
 ## Tests
 
 ```bash

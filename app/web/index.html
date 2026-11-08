@@ -20,7 +20,7 @@
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Ground Truth - a trusted expert loop for ACAPS risk analysis.">
-  <meta name="theme-color" content="#004A7C">
+  <meta name="theme-color" content="#004B78">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -35,47 +35,117 @@
   <link rel="manifest" href="manifest.json">
 
   <!--
-    Loading screen. Everything is inline (no fonts, no images) so it shows
-    instantly even on a very slow connection, while the app itself downloads.
-    It is removed when Flutter paints its first frame.
+    Phone or desktop? The app is built for phones. On a wide screen (a laptop
+    showing the live demo, or `flutter run -d edge`) it runs inside a phone
+    frame, so it gets a phone-sized screen and looks exactly as on a phone.
+    On a phone or a narrow window it fills the page as usual.
+    Decided once, at load; flutter_bootstrap.js reads the `gt-framed` class.
+    Add ?frame=off to the address to get the full page on a wide screen too.
+  -->
+  <script>
+    (function () {
+      var off = /[?&]frame=off\b/.test(location.search);
+      var wide = window.matchMedia('(min-width: 720px) and (min-height: 700px)').matches;
+      if (wide && !off) document.documentElement.classList.add('gt-framed');
+    })();
+  </script>
+
+  <!--
+    Loading screen. Everything is inline (no images, no web fonts needed) so
+    it shows instantly even on a very slow connection, while the app itself
+    downloads. It is removed when Flutter paints its first frame.
   -->
   <style>
-    html, body { margin: 0; height: 100%; background: #F2F3F4; }
+    /* The app's bundled acaps.org headline font (~35 KB, also used by the
+       app itself). Text shows in a fallback font until it arrives. */
+    @font-face {
+      font-family: "Bebas Neue"; font-display: swap;
+      src: url("assets/assets/fonts/BebasNeue-Regular.ttf") format("truetype");
+    }
+    /* ACAPS navy band, as on acaps.org and the app's first screen. */
+    html, body { margin: 0; height: 100%; background: #004B78; }
     #gt-splash {
-      position: fixed; inset: 0; z-index: 0;
+      position: fixed; inset: 0; z-index: 2;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       padding: 24px; box-sizing: border-box; text-align: center;
       font-family: "Roboto Condensed", "Arial Narrow", "Segoe UI", Roboto, Arial, sans-serif;
-      color: #1D1D1B; background: #F2F3F4;
+      color: #FFFFFF; background: #004B78;
     }
-    #gt-splash svg { width: 56px; height: 72px; }
+    #gt-splash svg { width: 56px; height: 67px; }
     #gt-splash h1 {
-      margin: 18px 0 4px; font-size: 30px; line-height: 1.05; font-weight: 900;
-      letter-spacing: -0.3px; text-transform: uppercase;
+      margin: 18px 0 4px; font-size: 34px; line-height: 1.05; font-weight: 700;
+      letter-spacing: 1px; text-transform: uppercase;
+      font-family: "Bebas Neue", "Roboto Condensed", "Arial Narrow", Arial, sans-serif;
     }
-    #gt-splash h1 span { color: #007FA3; }
-    #gt-splash .bar { width: 112px; height: 4px; margin: 14px auto 18px; background: #D9DEE2; overflow: hidden; }
-    #gt-splash .bar i { display: block; width: 40%; height: 100%; background: #0093B7; animation: gt-slide 1.2s ease-in-out infinite; }
-    #gt-splash p { margin: 0; max-width: 320px; font-size: 15px; line-height: 1.5; color: #55616B; }
+    #gt-splash h1 span { color: #3DB8D8; }
+    #gt-splash .bar { width: 112px; height: 3px; margin: 14px auto 18px; background: rgba(255,255,255,.18); overflow: hidden; }
+    #gt-splash .bar i { display: block; width: 40%; height: 100%; background: #3DB8D8; animation: gt-slide 1.2s ease-in-out infinite; }
+    #gt-splash p { margin: 0; max-width: 320px; font-size: 15px; line-height: 1.5; color: rgba(255,255,255,.85); }
     #gt-splash .slow { display: none; margin-top: 10px; }
     #gt-splash.is-slow .slow { display: block; }
     @keyframes gt-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
     @media (prefers-reduced-motion: reduce) { #gt-splash .bar i { animation: none; width: 100%; } }
+
+    /* ---- Phone frame (wide screens only) ---- */
+    #gt-stage { display: none; }
+    .gt-framed body { overflow: hidden; }
+    .gt-framed #gt-stage {
+      display: flex; align-items: center; justify-content: center; gap: 72px;
+      height: 100%; padding: 0 32px; box-sizing: border-box;
+    }
+    .gt-phone {
+      flex: none; position: relative;
+      /* 390 x 844 points: a common phone screen (e.g. iPhone 13/14). Shorter
+         when the window is not tall enough, never narrower. */
+      width: 390px; height: min(844px, calc(100vh - 64px));
+      border: 12px solid #0B1219; border-radius: 50px;
+      box-shadow: 0 0 0 1px rgba(255,255,255,.14), 0 30px 80px rgba(0,0,0,.45);
+    }
+    #gt-screen {
+      position: absolute; inset: 0; overflow: hidden;
+      border-radius: 38px; background: #F2F3F4;
+    }
+    #gt-app { position: absolute; inset: 0; }
+    .gt-framed #gt-splash { position: absolute; }
+    .gt-about {
+      flex: 0 1 360px; color: #FFFFFF;
+      font-family: "Roboto Condensed", "Arial Narrow", "Segoe UI", Roboto, Arial, sans-serif;
+    }
+    .gt-about .eyebrow { margin: 0 0 10px; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; color: #3DB8D8; }
+    .gt-about h2 {
+      margin: 0 0 16px; font-size: 56px; line-height: .95; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+      font-family: "Bebas Neue", "Roboto Condensed", "Arial Narrow", Arial, sans-serif;
+    }
+    .gt-about h2 span { color: #3DB8D8; }
+    .gt-about p { margin: 0 0 14px; font-size: 17px; line-height: 1.5; color: rgba(255,255,255,.88); }
+    .gt-about .hint { font-size: 14px; color: rgba(255,255,255,.66); }
+    .gt-about a { color: #FFFFFF; }
+    .gt-about a:focus-visible { outline: 2px solid #3DB8D8; outline-offset: 2px; }
+    @media (max-width: 999px) { .gt-about { display: none; } }
+
     @media (prefers-color-scheme: dark) {
-      html, body, #gt-splash { background: #0A1724; color: #E6EEF4; }
-      #gt-splash h1 span { color: #4CC6E6; }
-      #gt-splash .bar { background: #26425E; }
-      #gt-splash .bar i { background: #4CC6E6; }
-      #gt-splash p { color: #A3B6C7; }
-      #gt-splash .dot { fill: #E6EEF4; }
+      html, body, #gt-splash { background: #032B45; }
+      #gt-screen { background: #0A1724; }
     }
   </style>
 </head>
 <body>
+  <div id="gt-stage">
+    <aside class="gt-about">
+      <p class="eyebrow">ACAPS · Hackathon for Good #8</p>
+      <h2>Ground <span>Truth</span></h2>
+      <p>A trusted, moderated network of humanitarian experts that ground-truths and forecasts ACAPS risk analyses, in about two minutes per risk.</p>
+      <p class="hint">Built for phones: open this page on a phone and the app fills the screen. On a computer it runs at phone size, as you see here.</p>
+    </aside>
+    <div class="gt-phone">
+      <div id="gt-screen"><div id="gt-app"></div></div>
+    </div>
+  </div>
+
   <div id="gt-splash" role="status" aria-live="polite">
-    <svg viewBox="0 0 56 72" aria-hidden="true">
-      <path d="M28 2C13.6 2 2 13.6 2 28c0 17 26 42 26 42s26-25 26-42C54 13.6 42.4 2 28 2zm0 40a14 14 0 1 1 0-28 14 14 0 0 1 0 28z" fill="#0093B7"/>
-      <circle class="dot" cx="28" cy="28" r="8" fill="#1D1D1B"/>
+    <svg viewBox="0 0 90 108" aria-hidden="true">
+      <path fill-rule="evenodd" d="M45 108 13.5 77.1A45 45 0 1 1 76.5 77.1ZM45 14a31 31 0 1 0 0 62 31 31 0 0 0 0-62Z" fill="#3DB8D8"/>
+      <circle cx="45" cy="45" r="17" fill="#FFFFFF"/>
     </svg>
     <h1>Ground <span>Truth</span></h1>
     <div class="bar"><i></i></div>
@@ -86,6 +156,10 @@
   <script>
     (function () {
       var s = document.getElementById('gt-splash');
+      // In the phone frame the loading screen sits inside the phone's screen.
+      if (document.documentElement.classList.contains('gt-framed')) {
+        document.getElementById('gt-screen').appendChild(s);
+      }
       var t = setTimeout(function () { s && s.classList.add('is-slow'); }, 6000);
       window.addEventListener('flutter-first-frame', function () {
         clearTimeout(t);
@@ -93,14 +167,7 @@
       }, { once: true });
     })();
   </script>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
-
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
+  <!-- Starts the app: see web/flutter_bootstrap.js (full page or phone frame). -->
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
