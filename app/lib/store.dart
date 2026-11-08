@@ -2,13 +2,12 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth.dart';
-import 'csv.dart';
 import 'identity.dart';
 import 'models.dart';
+import 'risk_source.dart';
 
 export 'identity.dart';
 
@@ -234,10 +233,22 @@ class ForecastScore {
 }
 
 class AppState extends ChangeNotifier {
+  /// ACAPS's risks, from the Supabase `risks` table (kept equal to the live
+  /// Risk Radar API by scripts/sync_risks.dart), or the last copy saved on
+  /// this device when Supabase cannot be reached.
   List<Risk> risks = [];
 
-  /// The risks as in the bundled Risk Radar export, before any sync or edits.
-  List<Risk> _bundledRisks = const [];
+  /// When the sync last changed the risks in Supabase (latest imported_at).
+  DateTime? risksSyncedAt;
+
+  /// The risks shown are the copy saved on this device, because Supabase
+  /// could not be reached; [risksProblem] says why.
+  bool risksFromCache = false;
+  String? risksProblem;
+
+  /// A refresh of the risks is running (for the Refresh buttons).
+  bool refreshingRisks = false;
+
   bool loaded = false;
   String? error;
   SharedPreferences? _prefs;
@@ -266,7 +277,7 @@ class AppState extends ChangeNotifier {
   /// Sets the theme for the current account without saving (tests, previews).
   set theme(AppTheme t) => _display[_displayKey] = (theme: t, scale: textScale);
 
-  /// Risk to open straight away, e.g. from a tapped push notification (?risk=R1043).
+  /// Risk to open straight away, e.g. from a tapped push notification (?risk=R1055).
   String? deepLinkRisk;
 
   /// Risks already auto-opened this launch ("expertId|riskId"), so the pop-up shows once.
@@ -388,34 +399,81 @@ class AppState extends ChangeNotifier {
   /// The moderator signed in, if any.
   Moderator? get moderator => moderatorById(sessionModeratorId);
 
+  /// At launch (and from the Retry button when nothing could be loaded).
   Future<void> load() async {
+    loaded = false;
+    error = null;
     try {
-      final raw = await rootBundle.loadString('assets/risk-radar-export.csv');
-      final rows = parseCsv(raw);
-      final header = rows.first.map((h) => h.trim()).toList();
-      risks = rows.skip(1).where((r) => r.length > 1 && r[0].trim().isNotEmpty).map((r) {
-        final m = <String, String>{};
-        for (var i = 0; i < header.length; i++) {
-          m[header[i]] = i < r.length ? r[i] : '';
-        }
-        return Risk.fromRow(m);
-      }).toList();
-      // Untouched copy of the export, so Reset demo can undo imports and
-      // status syncs (see resetDemo).
-      _bundledRisks = List.unmodifiable(risks);
-
       try {
         _prefs = await SharedPreferences.getInstance();
       } catch (_) {
         // Storage is optional: the app still works, it just won't remember.
       }
       _restoreUi();
+      // Risks first: restoring answers and seeding the demo look them up.
+      await _loadRisks();
+      if (risks.isEmpty) {
+        throw StateError('No risks to show yet. ${risksProblem ?? ''}'.trim());
+      }
       if (!_restore()) _seed();
       checkAccountSession();
     } catch (e) {
-      error = '$e';
+      error = e is StateError ? e.message : '$e';
     }
     loaded = true;
+    notifyListeners();
+  }
+
+  // =========================================================================
+  // Risks: Supabase (synced from the ACAPS API), else the copy on this device
+  // =========================================================================
+
+  static const _risksKey = 'ground_truth_risks_v1';
+
+  /// Loads the risks from Supabase and keeps a copy on the device. When
+  /// Supabase cannot be reached, uses that copy instead. Never throws.
+  Future<void> _loadRisks() async {
+    try {
+      final snap = await riskSource.fetch();
+      if (snap.risks.isEmpty) throw StateError('The risks table in Supabase is empty. Run scripts/sync_risks.dart.');
+      risks = snap.risks;
+      risksSyncedAt = snap.syncedAt;
+      risksFromCache = false;
+      risksProblem = null;
+      _prefs?.setString(
+        _risksKey,
+        jsonEncode({
+          'synced_at': snap.syncedAt?.toUtc().toIso8601String(),
+          'risks': [for (final r in snap.risks) r.toJson()],
+        }),
+      );
+    } catch (e) {
+      risksProblem = explain(e);
+      try {
+        final raw = _prefs?.getString(_risksKey);
+        if (raw == null) return;
+        final m = jsonDecode(raw) as Map<String, dynamic>;
+        risks = [for (final r in m['risks'] as List) Risk.fromJson((r as Map).cast<String, dynamic>())];
+        risksSyncedAt = DateTime.tryParse('${m['synced_at']}')?.toLocal();
+        risksFromCache = true;
+      } catch (_) {
+        // Unreadable copy: nothing to show; load() reports the problem.
+      }
+    }
+  }
+
+  /// Reloads the risks from Supabase while the app runs (Refresh buttons).
+  /// Answers and comments stay: they are keyed by risk id. A risk the API
+  /// closed moves to the Archive and the forecasts given on it get scored.
+  Future<void> refreshRisks() async {
+    if (refreshingRisks) return;
+    refreshingRisks = true;
+    notifyListeners();
+    final before = risks;
+    await _loadRisks();
+    if (risks.isEmpty) risks = before;
+    refreshingRisks = false;
+    _statsCache.clear();
     notifyListeners();
   }
 
@@ -859,10 +917,7 @@ class AppState extends ChangeNotifier {
     if (hadAccount) Auth.signOut();
     _bannerDismissed.clear();
     autoOpened.clear(); // a reset demo shows the entry pop-up again
-    // Back to the export exactly as shipped: drops imported / app-made risks
-    // and every status synced from the ACAPS API.
-    risks = [..._bundledRisks];
-    _radarUpdates.clear();
+    // The risks stay: they are ACAPS's, not demo data.
     _seed();
     _statsCache.clear();
     notifyListeners();
@@ -902,7 +957,7 @@ class AppState extends ChangeNotifier {
     final e = me;
     if (e == null) return [];
     int score(Risk r) =>
-        (r.id == 'R1043' ? 1000 : 0) + (r.inCountry(e.homeCountry) ? 100 : 0) + (r.level == 'High' ? 10 : 0);
+        (r.id == demoRiskId ? 1000 : 0) +(r.inCountry(e.homeCountry) ? 100 : 0) + (r.level == 'High' ? 10 : 0);
     return risks.where((r) => r.isActive && r.probabilityIdx != null && relevantTo(e, r)).toList()
       ..sort((a, b) => score(b).compareTo(score(a)));
   }
@@ -1048,12 +1103,11 @@ class AppState extends ChangeNotifier {
   /// answers on active risks, so whoever demos them can take the survey.
   Response? _simulated(Expert e, Risk r) {
     if (!e.simulated || !relevantTo(e, r)) return null;
-    if (r.custom) return null; // a brand-new risk has no answers yet
-    // 7 risks in the export have no status: neither open nor closed, so
+    // 7 risks in the Risk Radar have no status: neither open nor closed, so
     // nobody could answer them (and they would "wait" forever).
     if (!r.isActive && !r.isResolved) return null;
     if (e.persona && r.isActive) return null;
-    if (r.id != 'R1043' && Random(stableHash('${e.id}|${r.id}')).nextDouble() > e.participation) return null;
+    if (r.id != demoRiskId &&Random(stableHash('${e.id}|${r.id}')).nextDouble() > e.participation) return null;
 
     final base = r.acapsLikelihood ?? 3;
 
@@ -1105,9 +1159,10 @@ class AppState extends ChangeNotifier {
   /// Demo storylines (synthetic, fixed so the demo tells a clear story):
   /// each expert's forecast a month ago and now, on the 1-5 ACAPS scale.
   static const _demoStories = <String, Map<String, ({int then, int now})>>{
-    // R1043: the panel moved from Medium to High after ACAPS's 30 Sep 2026
-    // update ("from a snapshot to a live picture").
-    'R1043': {
+    // The demo risk (R1055, returns from eastern Chad to West Darfur): the
+    // panel moved from Medium to High over the last month ("from a snapshot
+    // to a live picture").
+    demoRiskId: {
       'e4': (then: 3, now: 4),
       'e5': (then: 3, now: 4),
       'e6': (then: 4, now: 4),
@@ -1332,106 +1387,6 @@ class AppState extends ChangeNotifier {
   }
 
   // =========================================================================
-  // Risks created by the moderator
-  // =========================================================================
-
-  /// Next free id after the highest "R<number>" in use.
-  String nextRiskId() {
-    final n = risks.map((r) => int.tryParse(r.id.replaceAll(RegExp('[^0-9]'), '')) ?? 0).fold(0, max);
-    return 'R${n + 1}';
-  }
-
-  /// Adds a new risk, or replaces the one with the same id.
-  void saveRisk(Risk r) {
-    final i = risks.indexWhere((x) => x.id == r.id);
-    if (i >= 0) {
-      risks[i] = r;
-    } else {
-      risks.add(r);
-    }
-    _changed();
-  }
-
-  // =========================================================================
-  // Status sync with the ACAPS Risk Radar API
-  // =========================================================================
-  //
-  // The app has two kinds of risks, and they are saved differently:
-  //   * risks from the bundled CSV export: re-read from the CSV at every
-  //     start, never saved as a whole (custom == false);
-  //   * risks made in the app or imported from the API: saved in full on the
-  //     device under 'custom_risks' (custom == true).
-  // A status change on a custom risk is simply saved with it. For a CSV risk
-  // we save only the change ("R1037 is now Materialised") in _radarUpdates and
-  // replay it on top of the CSV at every start (see _restore). That keeps the
-  // CSV the single source for everything else, and Reset demo can undo the
-  // sync by forgetting the changes.
-  //
-  // Why status matters so much: it decides where a risk lives.
-  //   Active                         -> experts can answer (survey, forecast)
-  //   Materialised / Not materialised -> Archive: read-only, and the forecasts
-  //                                     experts gave are scored (Brier score)
-  //                                     against what really happened.
-
-  /// Status updates from the API for risks of the bundled export, by id:
-  /// {'status': ..., 'materialisation': ...}. Saved on the device and applied
-  /// on top of the export at every start; Reset demo clears them.
-  final Map<String, Map<String, String>> _radarUpdates = {};
-
-  /// Risks in the app whose status differs from the Risk Radar. Risks the API
-  /// does not list are left alone.
-  ///
-  /// Compared case- and space-insensitively ("Active " == "active"), because
-  /// the export and the API are not always typed the same way. Pure function:
-  /// changes nothing, so the screen can call it on every rebuild.
-  List<StatusChange> statusChanges(Iterable<Risk> fromApi) => [
-        for (final a in fromApi)
-          // Only risks the app has (`case final r?` = "if not null, call it r").
-          if (byId(a.id) case final r?)
-            if (a.status.trim().toLowerCase() != r.status.trim().toLowerCase())
-              StatusChange(r, a.status.trim(), a.materialisation),
-      ];
-
-  /// Applies the status changes. Answers given while a risk was active are
-  /// kept: once it closes they are the forecasts that get scored.
-  void applyStatusChanges(Iterable<StatusChange> changes) {
-    for (final c in changes) {
-      final i = risks.indexWhere((x) => x.id == c.risk.id);
-      if (i < 0) continue; // risk deleted meanwhile: nothing to update
-      // Keep our "what happened" text if the API has none.
-      final mat = c.materialisation.isEmpty ? null : c.materialisation;
-      risks[i] = risks[i].withStatus(c.to, materialisation: mat);
-      // CSV risks: remember the change so it survives a restart (see above).
-      if (!risks[i].custom) {
-        _radarUpdates[c.risk.id] = {'status': c.to, if (mat != null) 'materialisation': mat};
-      }
-    }
-    _changed(); // clears cached stats (scores change!), redraws, saves
-  }
-
-  /// Replays the saved status changes on top of the freshly loaded CSV.
-  /// Called from _restore, after the experts' answers are loaded.
-  void _applyRadarUpdates() {
-    for (var i = 0; i < risks.length; i++) {
-      final u = _radarUpdates[risks[i].id];
-      if (u == null || risks[i].custom) continue;
-      risks[i] = risks[i].withStatus(u['status']!, materialisation: u['materialisation']);
-    }
-  }
-
-  /// Only risks created in the app can be deleted; Risk Radar risks stay.
-  void deleteRisk(Risk r) {
-    if (!r.custom) return;
-    risks.removeWhere((x) => x.id == r.id);
-    comments.removeWhere((c) => c.riskId == r.id);
-    _responses.removeWhere((_, v) => v.riskId == r.id);
-    for (final s in _skipped.values) {
-      s.remove(r.id);
-    }
-    _changed();
-  }
-
-  // =========================================================================
   // Public view: aggregates only, safe to publish
   // =========================================================================
 
@@ -1552,7 +1507,7 @@ class AppState extends ChangeNotifier {
   String publicViewJson(Iterable<Risk> rs, {bool credits = false}) => const JsonEncoder.withIndent('  ').convert({
         'schema': 'acaps-ground-truth/expert-input/v3',
         'generated_at': DateTime.now().toUtc().toIso8601String(),
-        'field_names': 'Risk fields as in the ACAPS Risk Radar export / API (data/risk-radar-export.csv); '
+        'field_names': 'Risk fields as in the ACAPS Risk Radar API / export; '
             'expert_input is added by Ground Truth.',
         'min_respondents': minPanel,
         'probability_scale': {
@@ -1600,7 +1555,7 @@ class AppState extends ChangeNotifier {
           homeCountry: 'Chad', interests: {'Sudan', 'Cameroon'}, simulated: true, persona: true,
           participation: 0.85, skill: 0.8),
       Expert(id: 'p2', realName: 'Jean-Paul Ndoumbé', pseudonym: 'Kestrel-42', level: Anonymity.pseudonymous,
-          homeCountry: 'Cameroon', interests: {'Chad', 'Central African Republic'}, simulated: true, persona: true,
+          homeCountry: 'Cameroon', interests: {'Chad', 'Central African Republic', 'Sudan'}, simulated: true, persona: true,
           participation: 0.9, skill: 0.5),
       Expert(id: 'p3', realName: null, pseudonym: 'Sirocco-08', level: Anonymity.anonymous,
           homeCountry: 'Chad', interests: {'Sudan', 'Mali'}, simulated: true, persona: true,
@@ -1609,13 +1564,13 @@ class AppState extends ChangeNotifier {
       Expert(id: 'e4', realName: 'Fatimé Abakar', pseudonym: 'Baobab-23', level: Anonymity.knownToAcaps,
           homeCountry: 'Chad', interests: {'Sudan'}, simulated: true, participation: 0.9, skill: 0.9),
       Expert(id: 'e5', realName: 'Moussa Idriss', pseudonym: 'Lantern-61', level: Anonymity.pseudonymous,
-          homeCountry: 'Chad', simulated: true, participation: 0.8, skill: 0.4),
+          homeCountry: 'Chad', interests: {'Sudan'}, simulated: true, participation: 0.8, skill: 0.4),
       Expert(id: 'e6', realName: null, pseudonym: 'Delta-30', level: Anonymity.anonymous,
           homeCountry: 'Sudan', interests: {'Chad'}, simulated: true, participation: 0.75, skill: 0.6),
       Expert(id: 'e7', realName: 'Halima Osman', pseudonym: 'Nomad-55', level: Anonymity.pseudonymous,
           homeCountry: 'Sudan', interests: {'Chad', 'South Sudan'}, simulated: true, participation: 0.85, skill: 0.7),
       Expert(id: 'e8', realName: 'Mahamat Saleh', pseudonym: 'Meridian-12', level: Anonymity.knownToAcaps,
-          homeCountry: 'Chad', interests: {'Niger'}, simulated: true, onRating: false, participation: 0.7, skill: 0.2),
+          homeCountry: 'Chad', interests: {'Niger', 'Sudan'}, simulated: true, onRating: false, participation: 0.7, skill: 0.2),
       // Other panels.
       Expert(id: 'e9', realName: 'Omar Bashir', pseudonym: 'Atlas-77', level: Anonymity.pseudonymous,
           homeCountry: 'Sudan', interests: {'South Sudan'}, simulated: true, participation: 0.8, skill: 0.55),
@@ -1644,19 +1599,24 @@ class AppState extends ChangeNotifier {
       Referral('p1', DateTime(2026, 10, 28), 'e10'),
       Referral('p1', DateTime(2026, 11, 4), 'e13'),
     ];
-    final t1 = 'R1043 - T0618', t2 = 'R1043 - T0619', t3 = 'R1043 - T0620';
+    // The demo risk's triggers, by position (ids come from the Risk Radar).
+    // R1055: aid cuts in eastern Chad / relocation from border areas /
+    // returns through West Darfur entry points.
+    final demoItems = byId(demoRiskId)?.surveyItems ?? const <SurveyItem>[];
+    String item(int i) => demoItems.isEmpty ? 'risk' : demoItems[i.clamp(0, demoItems.length - 1)].id;
+    final t1 = item(0), t2 = item(1), t3 = item(2);
     comments = [
-      Comment(id: 's1', riskId: 'R1043', itemId: t1, authorId: 'e6',
-          text: 'Smuggling routes are shifting north. Watch Bahaï and Tiné, not only Adré.',
+      Comment(id: 's1', riskId: demoRiskId, itemId: t1, authorId: 'e6',
+          text: 'WFP ration cuts in Ouré Cassoni already pushed families to send one member back to check on land. Watch the next ration cycle.',
           agreeIds: {'e4', 'e5', 'e8'}),
-      Comment(id: 's2', riskId: 'R1043', itemId: t1, authorId: 'e4',
-          text: 'The rainy season (Jul-Sep) usually slows cross-border movement. Expect a dip before escalation picks up again.',
+      Comment(id: 's2', riskId: demoRiskId, itemId: t1, authorId: 'e4',
+          text: 'The rainy season (Jul-Sep) usually slows movement across the border. Expect a dip in returns before they pick up again.',
           agreeIds: {'e6', 'e7'}, disagreeIds: {'e5', 'e8'}),
-      Comment(id: 's3', riskId: 'R1043', itemId: t2, authorId: 'e7',
-          text: 'Threats against Amdjarass are mostly rhetoric so far. Attacks on fuel convoys on the Abéché road are the more likely strike.',
+      Comment(id: 's3', riskId: demoRiskId, itemId: t2, authorId: 'e7',
+          text: 'Relocation from Adré is mostly announced, not done yet. Fear of the army deployment is the stronger push for now.',
           agreeIds: {'e4', 'e5', 'e6', 'e8'}, useful: true, usefulBy: 'm2', reviewed: true, reviewedBy: 'm2'),
-      Comment(id: 's4', riskId: 'R1043', itemId: t3, authorId: 'e5',
-          text: 'Recruitment in the Ouaddaï camps is an earlier signal of proxy mobilisation than armed incursions.',
+      Comment(id: 's4', riskId: demoRiskId, itemId: t3, authorId: 'e5',
+          text: 'Pendular movement through Adré is easy to count as return. Many go back to Chad after the harvest.',
           agreeIds: {'e4', 'e6', 'e7'}, disagreeIds: {'e8'}, usedInRiskId: 'R1048', usedBy: 'm1', reviewed: true, reviewedBy: 'm1'),
       // A few more, so the moderator filters have something to show.
       Comment(id: 's6', riskId: 'R1048', itemId: byId('R1048')?.surveyItems.first.id ?? 'risk', authorId: 'e9',
@@ -1668,13 +1628,13 @@ class AppState extends ChangeNotifier {
       Comment(id: 's8', riskId: 'R1037', itemId: byId('R1037')?.surveyItems.first.id ?? 'risk', authorId: 'e10',
           text: 'Flooding in Jonglei will cut road access before the fighting does.',
           agreeIds: {'e9'}, disagreeIds: {'e7'}),
-      Comment(id: 's9', riskId: 'R1043', itemId: 'R1043 - T0620', authorId: 'e8',
-          text: 'I see little sign of proxy mobilisation yet; this trigger looks overrated.',
+      Comment(id: 's9', riskId: demoRiskId, itemId: t3, authorId: 'e8',
+          text: 'I see few households settling in El Geneina yet; this trigger looks overrated.',
           agreeIds: {}, disagreeIds: {'e4', 'e5', 'e6'}, reviewed: true, reviewedBy: 'm3'),
       // Persona history: shows moderator feedback under the My forecasts tab.
       Comment(id: 's5', riskId: 'R0002', itemId: byId('R0002')?.surveyItems.first.id ?? 'risk', authorId: 'p1',
           text: 'Fighting is pushing traders off the El Geneina - Adre route; watch fuel prices in Adre market.',
-          agreeIds: {'e4', 'e6', 'e7', 'e9'}, disagreeIds: {'e11'}, useful: true, usefulBy: 'm1', usedInRiskId: 'R1043', usedBy: 'm1',
+          agreeIds: {'e4', 'e6', 'e7', 'e9'}, disagreeIds: {'e11'}, useful: true, usefulBy: 'm1', usedInRiskId: demoRiskId, usedBy: 'm1',
           reviewed: true, reviewedBy: 'm1'),
     ];
   }
@@ -1683,7 +1643,9 @@ class AppState extends ChangeNotifier {
   // Persistence
   // =========================================================================
 
-  static const _prefsKey = 'ground_truth_db_v4';
+  // Its own key: older phone builds saved "practice" answers on closed risks,
+  // which this version must not score.
+  static const _prefsKey = 'ground_truth_mobile_db_v5';
 
   void _changed() {
     _statsCache.clear();
@@ -1698,8 +1660,6 @@ class AppState extends ChangeNotifier {
         'experts': [for (final e in experts) e.toJson()],
         'responses': [for (final r in _responses.values) r.toJson()],
         'comments': [for (final c in comments) c.toJson()],
-        'custom_risks': [for (final r in risks.where((r) => r.custom)) r.toJson()],
-        'radar_updates': _radarUpdates, // statuses synced from the ACAPS API (CSV risks only)
         'skipped': {for (final e in _skipped.entries) e.key: e.value.toList()},
         'invite': invitePanel,
         'invite_code': pendingInviteCode,
@@ -1722,8 +1682,8 @@ class AppState extends ChangeNotifier {
       _responses.clear();
       for (final r in m['responses'] as List) {
         final resp = Response.fromJson((r as Map).cast<String, dynamic>());
-        // Old "practice" answers on closed risks: no longer allowed, never scored.
-        if (byId(resp.riskId)?.isResolved ?? false) continue;
+        // Kept even when the risk has closed since: answers can only be given
+        // while a risk is active, so these are the forecasts that get scored.
         _responses['${resp.expertId}|${resp.riskId}'] = resp;
       }
       comments = [for (final c in m['comments'] as List) Comment.fromJson((c as Map).cast<String, dynamic>())];
@@ -1750,20 +1710,6 @@ class AppState extends ChangeNotifier {
         accountModerators[sessionAccountId!] = Moderator(id: sessionAccountId!, name: m['account_moderator_name'] as String);
       }
       sessionModeratorId = mod == true ? moderators.first.id : moderatorById(mod is String ? mod : null)?.id;
-      risks
-        ..removeWhere((r) => r.custom)
-        ..addAll([for (final r in (m['custom_risks'] as List? ?? const [])) Risk.fromJson((r as Map).cast<String, dynamic>())]);
-      // After the responses: answers given while a risk was still active stay.
-      // (The loop above drops answers on risks that are closed *in the CSV*;
-      // a risk closed later by a sync must keep its answers, because those are
-      // exactly the forecasts we now score. So the sync is replayed only now.)
-      _radarUpdates
-        ..clear()
-        ..addAll({
-          for (final e in ((m['radar_updates'] as Map?) ?? const {}).entries)
-            e.key as String: (e.value as Map).cast<String, String>(),
-        });
-      _applyRadarUpdates();
       return true;
     } catch (_) {
       return false; // corrupt or old state: start fresh

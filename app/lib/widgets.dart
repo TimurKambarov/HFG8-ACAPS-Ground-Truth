@@ -538,3 +538,86 @@ String formatDate(DateTime d) {
   const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return '${d.day} ${m[d.month - 1]} ${d.year}';
 }
+
+/// Where the risks on screen come from, with a Refresh button: the live ACAPS
+/// Risk Radar (via Supabase), or the copy on this device when offline.
+class RiskSourceLine extends StatelessWidget {
+  const RiskSourceLine({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final at = appState.risksSyncedAt;
+    final offline = appState.risksFromCache;
+    final text = offline
+        ? 'Offline copy of the ACAPS Risk Radar${at == null ? '' : ' (updated ${formatDate(at)})'}. ${appState.risksProblem ?? ''}'
+        : 'ACAPS Risk Radar · ${appState.risks.length} risks${at == null ? '' : ' · updated ${formatDate(at)}'}';
+    return Row(
+      children: [
+        Icon(offline ? Icons.cloud_off_outlined : Icons.cloud_done_outlined, size: 16, color: offline ? cs.error : cs.onSurfaceVariant),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(text.trim(), style: t.bodySmall?.copyWith(color: offline ? cs.error : null)),
+        ),
+        appState.refreshingRisks
+            ? const Padding(
+                padding: EdgeInsets.all(12),
+                child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+              )
+            : IconButton(
+                tooltip: 'Load the latest risks',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.refresh, size: 20),
+                onPressed: appState.refreshRisks,
+              ),
+      ],
+    );
+  }
+}
+
+/// Phones have no hover: a tap shows where agreeing / disagreeing experts come from.
+void showCountriesSheet(BuildContext context, {required Set<String> agreeIds, required Set<String> disagreeIds, required List<String> riskCountries}) {
+  showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (context) {
+      final t = Theme.of(context).textTheme;
+      Widget block(IconData icon, String title, Set<String> ids) => Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(icon, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('$title · ${ids.length}', style: t.titleSmall),
+                      const SizedBox(height: 2),
+                      Text(describeSplit(appState.expertsByIds(ids), riskCountries), style: t.bodyMedium),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Where these experts are from', style: t.titleMedium),
+              const SizedBox(height: 14),
+              block(Icons.thumb_up_alt_outlined, 'Agree', agreeIds),
+              block(Icons.thumb_down_alt_outlined, 'Disagree', disagreeIds),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}

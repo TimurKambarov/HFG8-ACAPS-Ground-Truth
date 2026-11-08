@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models.dart';
 import '../store.dart';
@@ -610,7 +611,11 @@ class ScalePicker extends StatelessWidget {
                 ),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(12),
-                  onTap: () => onSelect(i),
+                  onTap: () {
+                    // A light tick, so a tap on a small target is felt.
+                    HapticFeedback.selectionClick();
+                    onSelect(i);
+                  },
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(minHeight: 64),
                     child: Padding(
@@ -1334,6 +1339,13 @@ class CommentCard extends StatelessWidget {
                     riskCountries: rc,
                     active: me != null && c.disagreeIds.contains(me.id),
                     onTap: canReact ? () => appState.react(c, false) : null,
+                  ),
+                  // Phones have no hover: a sheet shows where those experts come from.
+                  ActionChip(
+                    avatar: const Icon(Icons.public, size: 16),
+                    label: const Text('Who?'),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => showCountriesSheet(context, agreeIds: c.agreeIds, disagreeIds: c.disagreeIds, riskCountries: rc),
                   ),
                 ],
               ),

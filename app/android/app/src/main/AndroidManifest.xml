@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Login talks to Supabase. Debug builds get this automatically, release builds need it here. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="ground_truth"
+        android:label="Ground Truth"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

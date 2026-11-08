@@ -165,7 +165,8 @@ class _InboxTabState extends State<InboxTab> {
             Text('Hi, ${displayName(me, appState.viewer)}', style: t.headlineSmall),
             const SizedBox(height: 4),
             Text('Your countries: ${([me.homeCountry, ...me.interests]).join(', ')}', style: t.bodySmall),
-            const SizedBox(height: 12),
+            const RiskSourceLine(),
+            const SizedBox(height: 4),
             // Search + filter button, exactly as on the moderators' Risks tab.
             Row(
               children: [
@@ -207,7 +208,7 @@ class _InboxTabState extends State<InboxTab> {
             if (searching && active.isEmpty && allClosed.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Text('No risks match. Try a risk number (e.g. 1043), a word from the title, a country or a category.',
+                child: Text('No risks match. Try a risk number (e.g. 1055), a word from the title, a country or a category.',
                     style: t.bodyMedium),
               ),
             // Slides away after "Not now", so it is obvious the tap worked.
@@ -764,17 +765,27 @@ class _RatingTabState extends State<RatingTab> {
               ],
             ),
             const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: SegmentedButton<RatingScope>(
-                showSelectedIcon: false,
-                segments: [
-                  ButtonSegment(value: RatingScope.country, label: Text(me == null ? 'Country' : 'My country'), icon: const Icon(Icons.place_outlined)),
-                  ButtonSegment(value: RatingScope.region, label: Text(me == null ? 'Region' : 'My region'), icon: const Icon(Icons.map_outlined)),
-                  const ButtonSegment(value: RatingScope.all, label: Text('All'), icon: Icon(Icons.public)),
+            // Chips in a row that scrolls sideways: three segments do not fit
+            // a narrow phone at large text sizes.
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final (sc, label, icon) in [
+                    (RatingScope.country, me == null ? 'Country' : 'My country', Icons.place_outlined),
+                    (RatingScope.region, me == null ? 'Region' : 'My region', Icons.map_outlined),
+                    (RatingScope.all, 'All countries', Icons.public),
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        avatar: Icon(icon, size: 18),
+                        label: Text(label),
+                        selected: _scope == sc,
+                        onSelected: (_) => setState(() => _scope = sc),
+                      ),
+                    ),
                 ],
-                selected: {_scope},
-                onSelectionChanged: (v) => setState(() => _scope = v.first),
               ),
             ),
             if (_scope != RatingScope.all) ...[

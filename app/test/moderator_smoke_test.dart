@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -9,6 +8,8 @@ import 'package:ground_truth/models.dart';
 import 'package:ground_truth/screens/risk_filter.dart';
 import 'package:ground_truth/store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'fixture_risks.dart';
 
 Future<void> _start(WidgetTester tester, Size size) async {
   SharedPreferences.setMockInitialValues({});
@@ -24,6 +25,8 @@ Future<void> _start(WidgetTester tester, Size size) async {
 }
 
 void main() {
+  setUpAll(useFixtureRisks);
+
   for (final size in [const Size(1900, 1000), const Size(400, 800)]) {
     testWidgets('moderator renders all tabs and sheets at ${size.width}', (tester) async {
       await _start(tester, size);
@@ -77,7 +80,7 @@ void main() {
       await tester.tap(find.text('Comments').last);
       await tester.pumpAndSettle();
       if (size.width < 900) {
-        await tester.tap(find.textContaining('R1043 ·').first);
+        await tester.tap(find.textContaining('R1055 ·').first);
         await tester.pumpAndSettle();
       }
       expect(find.text('Mark reviewed'), findsWidgets);
@@ -93,11 +96,11 @@ void main() {
       await tester.tapAt(const Offset(10, 10));
       await tester.pumpAndSettle();
 
-      // Expert-input sheet from the R1043 page lists contributors who opted in.
+      // Expert-input sheet from the R1055 page lists contributors who opted in.
       await tester.tap(find.text('Risks').last);
       await tester.pumpAndSettle();
       if (size.width < 900) {
-        await tester.tap(find.textContaining('R1043').first);
+        await tester.tap(find.textContaining(demoRiskId).first);
         await tester.pumpAndSettle();
       }
       // Scroll until the button is really tappable (not under the sticky bottom bar).
@@ -122,7 +125,7 @@ void main() {
       await tester.tap(find.text('Risks').last);
       await tester.pumpAndSettle();
       if (size.width < 900) {
-        await tester.tap(find.textContaining('R1043').first);
+        await tester.tap(find.textContaining(demoRiskId).first);
         await tester.pumpAndSettle();
       }
       final chip = find.textContaining('· open');
@@ -143,12 +146,18 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      // New risk form opens from the Risks tab.
+      // Risks tab: ACAPS's risks only (from the Risk Radar via Supabase), no
+      // import or "new risk" on the phone; a Refresh button instead.
       await tester.tap(find.text('Risks').last);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('New risk'));
-      await tester.pumpAndSettle();
-      expect(find.text('Publish to experts'), findsOneWidget);
+      // ("New risk" is also a risk-type chip, so look for buttons only.)
+      Finder button(String label) =>
+          find.ancestor(of: find.text(label), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton));
+      expect(button('New risk'), findsNothing);
+      expect(button('Import'), findsNothing);
+      expect(button('Sync statuses'), findsNothing);
+      expect(find.textContaining('ACAPS Risk Radar · ${appState.risks.length} risks'), findsWidgets);
+      expect(find.byTooltip('Load the latest risks'), findsWidgets);
     });
   }
 
@@ -249,7 +258,7 @@ void main() {
     final s = AppState();
     await s.load();
     expect(s.byId('R0233')!.fromEarlierList, isTrue);
-    expect(s.byId('R1043')!.fromEarlierList, isFalse);
+    expect(s.byId(demoRiskId)!.fromEarlierList, isFalse);
   });
 
   testWidgets('start screen: type a code to reach the profile form; Log in to existing users', (tester) async {
@@ -593,30 +602,6 @@ void main() {
     expect(again.comments.firstWhere((x) => x.id == c.id).usefulBy, 'm2');
   });
 
-  test('saved risks persist, have no simulated answers, and can be deleted', () async {
-    SharedPreferences.setMockInitialValues({});
-    final s = AppState();
-    await s.load();
-    final id = s.nextRiskId();
-    s.saveRisk(Risk(
-      custom: true, id: id, title: 'Test risk', type: 'New emerging risk', country: 'Chad', rationale: 'Because.',
-      probabilityIdx: 3, impact: 4, level: 'High', trend: '', status: 'Active', exposure: '', needs: '',
-      materialisation: '', triggers: const [Trigger(id: 'T1', title: 'Trigger one', description: '')],
-    ));
-    expect(s.respondents(s.byId(id)!), isEmpty);
-    expect(s.panelForRisk(s.byId(id)!).length, greaterThanOrEqualTo(minPanel));
-
-    final again = AppState();
-    await again.load();
-    expect(again.byId(id)?.title, 'Test risk');
-    expect(again.byId(id)?.triggers.single.title, 'Trigger one');
-
-    again.deleteRisk(again.byId(id)!);
-    final third = AppState();
-    await third.load();
-    expect(third.byId(id), isNull);
-  });
-
   testWidgets('survey: triggers first, then one scored forecast', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await tester.runAsync(() => appState.load());
@@ -630,7 +615,7 @@ void main() {
     await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Start')));
     await tester.pumpAndSettle();
 
-    final r = appState.byId('R1043')!;
+    final r = appState.byId(demoRiskId)!;
     for (var i = 0; i < r.surveyItems.length; i++) {
       expect(find.textContaining('Trigger ${i + 1} of'), findsWidgets);
       expect(find.textContaining('How likely'), findsNothing); // no forecast on trigger screens
@@ -711,7 +696,7 @@ void main() {
 
     // Answers saved in the old format (likelihood per trigger) become one forecast.
     final old = Response.fromJson({
-      'expert': 'x', 'risk': 'R1043', 'at': '2026-10-01T00:00:00.000',
+      'expert': 'x', 'risk': demoRiskId, 'at': '2026-10-01T00:00:00.000',
       'items': {
         'a': {'agree': 0, 'likelihood': 4, 'severity': 3},
         'b': {'agree': 1, 'likelihood': 5, 'severity': 3},
@@ -725,30 +710,28 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final s = AppState();
     await s.load();
-    final m = jsonDecode(s.publicViewJson([s.byId('R1043')!])) as Map<String, dynamic>;
+    final m = jsonDecode(s.publicViewJson([s.byId(demoRiskId)!])) as Map<String, dynamic>;
     final r = (m['risks'] as List).single as Map<String, dynamic>;
 
     // ACAPS fields use the Risk Radar export / API names (feedback notes, section 7).
-    final header = (await File('assets/risk-radar-export.csv').readAsLines()).first.split(',');
     for (final k in ['Risk ID', 'Risk Title', 'Risk Type', 'ISO', 'Country', 'Probability', 'Impact', 'Risk Level', 'Risk trend', 'Status']) {
-      expect(header, contains(k));
       expect(r.containsKey(k), isTrue, reason: k);
     }
-    expect(r['Risk ID'], 'R1043');
-    expect(r['ISO'], 'TCD');
-    expect(r['Probability'], 'High');
+    expect(r['Risk ID'], demoRiskId);
+    expect(r['ISO'], 'SDN');
+    expect(r['Probability'], 'Medium');
     expect(m['probability_scale']['4'], {'label': 'High', 'range': '67–90%'});
 
     // Expert input: one forecast per risk; triggers carry ground truthing only.
     final x = r['expert_input'] as Map<String, dynamic>;
     expect(x['published'], isTrue);
     expect((x['forecast']['distribution_1_5'] as List).length, 5);
-    expect(x['forecast']['median_label'], 'High (67–90%)'); // the R1043 demo story
+    expect(x['forecast']['median_label'], 'High (67–90%)'); // the demo story
     expect(x['forecast']['opinions_split'], isFalse);
     expect(x['forecast']['trend']['then_label'], 'Medium'); // the live picture
     expect(x['forecast']['trend']['now_label'], 'High');
     final q = (x['triggers'] as List).first as Map<String, dynamic>;
-    expect(q['Trigger ID'], 'R1043 - T0618');
+    expect(q['Trigger ID'], 'R1055 - T0649');
     expect(q.containsKey('likelihood'), isFalse);
     expect((q['severity']['distribution_1_5'] as List).length, 5);
 
@@ -759,31 +742,31 @@ void main() {
     for (final e in s.experts) {
       expect(text.contains(e.pseudonym), isFalse);
     }
-    expect(text.contains('Smuggling routes'), isFalse); // no comments
+    expect(text.contains('ration cuts'), isFalse); // no comments
 
     // With credits: by default each expert is credited as their profile
     // anonymity level says (1 real name, 2 pseudonym, 3 anonymous).
-    final r1043 = s.byId('R1043')!;
-    final withNames = (jsonDecode(s.publicViewJson([r1043], credits: true))['risks'] as List).single['expert_input'] as Map<String, dynamic>;
+    final demo = s.byId(demoRiskId)!;
+    final withNames = (jsonDecode(s.publicViewJson([demo], credits: true))['risks'] as List).single['expert_input'] as Map<String, dynamic>;
     final names = [for (final c in withNames['contributors'] as List) c['name']];
     expect(names, contains('Fatimé Abakar')); // level 1: real name
     expect(names, contains('Nomad-55')); // level 2: pseudonym
     expect(names, isNot(contains('Delta-30'))); // level 3: anonymous
-    expect(withNames['anonymous_contributors'], s.respondents(r1043).length - names.length);
+    expect(withNames['anonymous_contributors'], s.respondents(demo).length - names.length);
 
     // The default follows the profile, and the expert can change it per risk.
     s.signInAs(s.expertById('p1')!); // level 1, real name stored
     expect(defaultCredit(s.me!), Credit.realName);
     expect(defaultCredit(s.expertById('p2')!), Credit.pseudonym);
     expect(defaultCredit(s.expertById('p3')!), Credit.anonymous);
-    s.submit(r1043, {for (final it in r1043.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, severity: 3)}, forecast: 3);
-    expect(s.creditsFor(r1043).map((c) => c.name), contains('Amina Haroun'));
-    s.submit(r1043, {for (final it in r1043.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, severity: 3)}, forecast: 3,
+    s.submit(demo, {for (final it in demo.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, severity: 3)}, forecast: 3);
+    expect(s.creditsFor(demo).map((c) => c.name), contains('Amina Haroun'));
+    s.submit(demo, {for (final it in demo.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, severity: 3)}, forecast: 3,
         credit: Credit.anonymous);
-    expect(s.creditsFor(r1043).map((c) => c.name), isNot(contains('Amina Haroun')));
-    s.submit(r1043, {for (final it in r1043.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, severity: 3)}, forecast: 3,
+    expect(s.creditsFor(demo).map((c) => c.name), isNot(contains('Amina Haroun')));
+    s.submit(demo, {for (final it in demo.surveyItems) it.id: const ItemAnswer(agree: Agreement.yes, severity: 3)}, forecast: 3,
         credit: Credit.pseudonym);
-    expect(s.creditsFor(r1043).map((c) => c.name), contains('Harmattan-17'));
+    expect(s.creditsFor(demo).map((c) => c.name), contains('Harmattan-17'));
   });
 
   testWidgets('experts can search risks by number, word or country', (tester) async {
@@ -805,7 +788,7 @@ void main() {
     await tester.enterText(field, '1049');
     await tester.pumpAndSettle();
     expect(find.textContaining('R1049'), findsWidgets);
-    expect(find.textContaining('R1043'), findsNothing);
+    expect(find.textContaining(demoRiskId), findsNothing);
 
     // By word: closed risks match too (archive), e.g. R0073, protests in Sudan.
     await tester.enterText(field, 'protests');
@@ -820,15 +803,15 @@ void main() {
     // "Clear" brings the full list back (as on the moderators' Risks tab).
     await tester.tap(find.text('Clear'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('R1043'), findsWidgets);
+    expect(find.textContaining(demoRiskId), findsWidgets);
     expect(find.textContaining('recommended for you'), findsOneWidget); // the experts' default sort
 
     // Categories: the search matches them.
-    final r1043 = appState.byId('R1043')!;
-    expect(r1043.type, 'Marked deterioration in an existing crisis');
+    final demo = appState.byId(demoRiskId)!;
+    expect(demo.type, 'Marked deterioration in an existing crisis');
     await tester.enterText(field, 'deterioration');
     await tester.pumpAndSettle();
-    expect(find.textContaining('R1043'), findsWidgets);
+    expect(find.textContaining(demoRiskId), findsWidgets);
     await tester.tap(find.text('Clear'));
     await tester.pumpAndSettle();
 
@@ -839,16 +822,16 @@ void main() {
     expect(find.text('Expected priority needs (any of)'), findsOneWidget);
     expect(find.text('Risks with comments to review'), findsNothing);
     expect(find.text('Risks where experts are split'), findsNothing);
-    final missing = priorityNeeds.firstWhere((n) => !r1043.needList.contains(n));
+    final missing = priorityNeeds.firstWhere((n) => !demo.needList.contains(n));
     await tester.tap(find.widgetWithText(FilterChip, missing));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Done'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('R1043'), findsNothing); // R1043 has no "$missing" need
+    expect(find.textContaining('R1055'), findsNothing); // R1055 has no "$missing" need
     expect(find.descendant(of: find.byType(Badge), matching: find.text('1')), findsOneWidget);
     await tester.tap(find.text('Clear'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('R1043'), findsWidgets);
+    expect(find.textContaining(demoRiskId), findsWidgets);
   });
 
   test('two registrations in the same instant get different accounts', () async {
@@ -917,8 +900,8 @@ void main() {
     expect(f.apply(s.risks).every((x) => x.$1.needs.toLowerCase().contains('food security') || x.$1.title.toLowerCase().contains('food security')), isTrue);
 
     // The export uses ACAPS's field names for them too.
-    final json = jsonDecode(s.publicViewJson([s.byId('R1043')!]))['risks'][0] as Map<String, dynamic>;
+    final json = jsonDecode(s.publicViewJson([s.byId(demoRiskId)!]))['risks'][0] as Map<String, dynamic>;
     expect(json['Expected priority needs'], isNotNull);
-    expect(json['Expected exposure'], '>500,000');
+    expect(json['Expected exposure'], '100,000-250,000');
   });
 }

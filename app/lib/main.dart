@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'auth.dart';
 import 'screens/entry.dart';
@@ -9,6 +10,8 @@ import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Phone version: portrait only.
+  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   // A tapped push notification opens the app with ?risk=<id> (web) or the
   // same value from the notification payload (mobile).
   appState.deepLinkRisk = Uri.base.queryParameters['risk'];
@@ -60,7 +63,33 @@ class GroundTruthApp extends StatelessWidget {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (appState.error != null) {
-      return Scaffold(body: Center(child: Text('Could not load data:\n${appState.error}')));
+      // Usually the first launch without a connection: the risks come from
+      // Supabase and there is no copy on this device yet.
+      return Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.cloud_off_outlined, size: 48),
+                  const SizedBox(height: 16),
+                  const Text('Could not load the risks', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 8),
+                  Text(appState.error!, textAlign: TextAlign.center),
+                  const SizedBox(height: 20),
+                  FilledButton.icon(
+                    onPressed: () => appState.load().then((_) => appState.refreshAccount()),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
     }
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 300),

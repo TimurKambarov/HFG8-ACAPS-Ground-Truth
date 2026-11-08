@@ -565,7 +565,10 @@ class _CountryPickerState extends State<_CountryPicker> {
     final list = appState.countries
         .where((c) => !widget.exclude.contains(c) && c.toLowerCase().contains(_q.toLowerCase()))
         .toList();
-    return SizedBox(
+    // Lifted above the phone keyboard, so the search field stays visible.
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SizedBox(
       height: MediaQuery.sizeOf(context).height * 0.7,
       child: Column(
         children: [
@@ -583,6 +586,7 @@ class _CountryPickerState extends State<_CountryPicker> {
             ),
           ),
         ],
+      ),
       ),
     );
   }

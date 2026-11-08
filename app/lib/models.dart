@@ -30,7 +30,7 @@ int? parseLevel5(String s) {
   return null;
 }
 
-/// ACAPS risk categories, exactly as in the Risk Radar export (and on the
+/// ACAPS risk categories, exactly as in the ACAPS Risk Radar (API and the
 /// ACAPS website). Each risk carries ACAPS's own values; none are invented.
 const riskTypes = [
   'New emerging risk',
@@ -109,7 +109,7 @@ class Risk {
   final String type;
   final String country;
 
-  /// ISO 3166-1 alpha-3 code(s), as in the Risk Radar export (e.g. "TCD").
+  /// ISO 3166-1 alpha-3 code(s), as in the ACAPS Risk Radar (e.g. "TCD").
   final String iso;
   final String rationale;
   final int? probabilityIdx;
@@ -122,11 +122,7 @@ class Risk {
   final String materialisation;
   final List<Trigger> triggers;
 
-  /// Created by an ACAPS moderator in the app (not from the Risk Radar export).
-  final bool custom;
-
   const Risk({
-    this.custom = false,
     required this.id,
     required this.title,
     required this.type,
@@ -144,51 +140,20 @@ class Risk {
     required this.triggers,
   });
 
-  factory Risk.fromRow(Map<String, String> m) {
-    String f(String k) => (m[k] ?? '').trim();
-    final mat = [f('Hazard materialisation'), f('Impact materialisation description')]
-        .where((s) => s.isNotEmpty)
-        .join('\n\n');
-    return Risk(
-      id: f('Risk ID'),
-      title: f('Risk Title'),
-      type: f('Risk Type'),
-      country: f('Country'),
-      iso: f('ISO'),
-      rationale: stripMarkdownLinks(f('Rationale')),
-      probabilityIdx: parseLevel5(f('Probability')),
-      impact: int.tryParse(f('Impact')),
-      level: f('Risk Level'),
-      trend: f('Risk trend'),
-      status: f('Status'),
-      exposure: f('Expected exposure'),
-      needs: f('Expected priority needs'),
-      materialisation: stripMarkdownLinks(mat),
-      triggers: parseTriggers(m['Triggers'] ?? ''),
-    );
-  }
-
-  /// One record of the ACAPS API `risk-radar/risk-radar/` endpoint. Field
-  /// names differ from the export (snake_case, lists for countries), but
-  /// `triggers_summary` uses the same "Trigger ID: / Title:" format.
-  /// Marked [custom] so it is saved on the device like a risk made in the app.
+  /// One row of the Supabase `risks` table. scripts/sync_risks.dart fills it
+  /// from the ACAPS Risk Radar API (risk-radar/risk-radar/), so these are
+  /// ACAPS's live risks, not the CSV export in data/.
   ///
-  /// Mapping, API field -> our field (the CSV column is in brackets):
-  ///   risk_id                    -> id            (Risk ID)
-  ///   risk_title                 -> title         (Risk Title)
-  ///   risk_type                  -> type          (Risk Type)
-  ///   iso3   ["TCD", "SDN"]      -> iso "TCD, SDN"        (ISO)
-  ///   country ["Chad", "Sudan"]  -> country "Chad, Sudan" (Country)
-  ///   probability "High"         -> probabilityIdx 3 (0 = Very low ... 4 = Very high)
-  ///   impact "4"                 -> impact 4
-  ///   risk_level / risk_trend / status  -> level / trend / status
-  ///   hazard_ + impact_materialisation_description -> materialisation
-  ///   triggers_summary           -> triggers (parsed like the CSV column)
-  /// Using the same parsers as the CSV (parseLevel5, parseTriggers,
-  /// stripMarkdownLinks) means an imported risk looks exactly like one from
-  /// the export everywhere in the app.
-  factory Risk.fromApi(Map<String, dynamic> m) {
-    // Reads a field as clean text: null -> "", lists -> "a, b", trimmed.
+  /// Mapping, table column -> our field:
+  ///   risk_id / title / risk_type / iso / country -> id / title / type / iso / country
+  ///   probability "High"          -> probabilityIdx 3 (0 = Very low ... 4 = Very high)
+  ///   impact 4                    -> impact 4
+  ///   risk_level / risk_trend / status / expected_exposure -> level / trend / status / exposure
+  ///   expected_priority_needs [..] -> needs "Food security, Protection"
+  ///   hazard_materialisation + impact_materialisation_description -> materialisation
+  ///   triggers_raw                -> triggers (the API's "Trigger ID: / Title:" text)
+  factory Risk.fromDb(Map<String, dynamic> m) {
+    // Reads a column as clean text: null -> "", lists -> "a, b", trimmed.
     String f(String k) {
       final v = m[k];
       if (v == null) return '';
@@ -196,21 +161,16 @@ class Risk {
       return '$v'.trim();
     }
 
-    // "What happened": the API splits it into hazard and impact; we show both
-    // as two paragraphs, like Risk.fromRow does for the CSV.
-    final mat = [f('hazard_materialisation_description'), f('impact_materialisation_description')]
+    // "What happened": hazard and impact, as two paragraphs.
+    final mat = [f('hazard_materialisation'), f('impact_materialisation_description')]
         .where((s) => s.isNotEmpty)
         .join('\n\n');
-    // The API also has a plain `triggers` list (ids only); the summary has the
-    // titles and descriptions the survey needs.
-    final triggers = m['triggers_summary'];
     return Risk(
-      custom: true,
       id: f('risk_id'),
-      title: f('risk_title'),
+      title: f('title'),
       type: f('risk_type'),
       country: f('country'),
-      iso: f('iso3'),
+      iso: f('iso'),
       rationale: stripMarkdownLinks(f('rationale')),
       probabilityIdx: parseLevel5(f('probability')),
       impact: int.tryParse(f('impact')),
@@ -220,10 +180,11 @@ class Risk {
       exposure: f('expected_exposure'),
       needs: f('expected_priority_needs'),
       materialisation: stripMarkdownLinks(mat),
-      triggers: parseTriggers(triggers is String ? triggers : ''),
+      triggers: parseTriggers(f('triggers_raw')),
     );
   }
 
+  /// For the on-device copy of the last risks loaded (offline use).
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
@@ -240,12 +201,11 @@ class Risk {
         'needs': needs,
         'materialisation': materialisation,
         'triggers': [
-          for (final t in triggers) {'id': t.id, 'title': t.title, 'description': t.description},
+          for (final t in triggers) {'id': t.id, 'title': t.title, 'description': t.description, 'completion': t.completion},
         ],
       };
 
   factory Risk.fromJson(Map<String, dynamic> m) => Risk(
-        custom: true,
         id: m['id'] as String,
         title: m['title'] as String,
         type: (m['type'] as String?) ?? '',
@@ -256,38 +216,19 @@ class Risk {
         impact: (m['impact'] as num?)?.toInt(),
         level: (m['level'] as String?) ?? '',
         trend: (m['trend'] as String?) ?? '',
-        status: (m['status'] as String?) ?? 'Active',
+        status: (m['status'] as String?) ?? '',
         exposure: (m['exposure'] as String?) ?? '',
         needs: (m['needs'] as String?) ?? '',
         materialisation: (m['materialisation'] as String?) ?? '',
         triggers: [
           for (final t in (m['triggers'] as List? ?? const []))
-            Trigger(id: t['id'] as String, title: t['title'] as String, description: (t['description'] as String?) ?? ''),
+            Trigger(
+              id: t['id'] as String,
+              title: t['title'] as String,
+              description: (t['description'] as String?) ?? '',
+              completion: (t['completion'] as num?)?.toInt(),
+            ),
         ],
-      );
-
-  /// Same risk with a new status (and what happened), e.g. after a Risk Radar sync.
-  ///
-  /// [Risk] is immutable (all fields final), so instead of changing a risk we
-  /// build a copy with the new values. Everything else, including the id, stays
-  /// the same, so answers and comments stay linked to the risk.
-  Risk withStatus(String status, {String? materialisation}) => Risk(
-        custom: custom,
-        id: id,
-        title: title,
-        type: type,
-        country: country,
-        iso: iso,
-        rationale: rationale,
-        probabilityIdx: probabilityIdx,
-        impact: impact,
-        level: level,
-        trend: trend,
-        status: status,
-        exposure: exposure,
-        needs: needs,
-        materialisation: materialisation ?? this.materialisation,
-        triggers: triggers,
       );
 
   bool get isActive => status.toLowerCase() == 'active';
@@ -298,7 +239,7 @@ class Risk {
   /// Imported from ACAPS's earlier risk list (IDs below R1000). The brief
   /// warns these "resolve over much longer periods than recent ones", so
   /// their scores are not true 6-month forecasts: labelled as indicative.
-  bool get fromEarlierList => !custom && (int.tryParse(id.replaceAll(RegExp('[^0-9]'), '')) ?? 1000) < 1000;
+  bool get fromEarlierList => (int.tryParse(id.replaceAll(RegExp('[^0-9]'), '')) ?? 1000) < 1000;
 
   bool inCountry(String c) =>
       country.split(',').map((s) => s.trim()).contains(c);
@@ -336,26 +277,14 @@ class Risk {
   }
 }
 
-/// A risk whose status in the ACAPS Risk Radar differs from the app's.
-/// Produced by AppState.statusChanges, listed on the "Sync statuses" screen,
-/// applied by AppState.applyStatusChanges.
-class StatusChange {
-  /// The risk as it is in the app now (so [from] is its current status).
-  final Risk risk;
-
-  /// The status in the Risk Radar: "Active", "Materialised" or "Not materialised".
-  final String to;
-
-  /// What happened, from the API (empty if it has no text).
-  final String materialisation;
-  const StatusChange(this.risk, this.to, this.materialisation);
-
-  String get from => risk.status;
-}
+/// The demo risk: the survey shown first, with a fixed storyline (see
+/// AppState._demoStories). It must be an active risk in the ACAPS Risk Radar
+/// API; R1055 is about refugees returning from eastern Chad to West Darfur.
+const demoRiskId = 'R1055';
 
 /// Hand-written one-line summaries for demo risks; others fall back to the title.
 const _oneLiners = {
-  'R1043': 'The war in Sudan may spill across the border into eastern Chad.',
+  demoRiskId: 'People returning from eastern Chad may deepen needs in West Darfur.',
 };
 
 extension RiskSurvey on Risk {
