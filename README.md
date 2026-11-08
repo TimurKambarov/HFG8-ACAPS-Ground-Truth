@@ -11,7 +11,16 @@ Ground Truth is a phone app that gives ACAPS a small, trusted, moderated network
 Every forecast is scored against what really happened, so a track record builds up and **super estimators** emerge. Each expert chooses their own **anonymity level**, and individual contributions are never shown to the public. ACAPS moderators get the aggregated expert input next to their own assessment, review comments, and manage the panels. ACAPS still makes the forecast.
 
 > **Live demo:** **https://timurkambarov.github.io/HFG8-ACAPS-Ground-Truth/**. On a computer the app runs inside a phone frame, at phone size; on a phone it fills the screen. It uses the real backend (Supabase accounts, invite codes, the live ACAPS Risk Radar).
-> **Run it yourself:** [`app/`](app/) (Flutter, Android and web), see [`app/README.md`](app/README.md). Demo risk: **R1055** (mass returns from eastern Chad to West Darfur).
+> **Android:** the app is distributed as an APK, see [Build the APK](app/README.md#build-the-apk). Demo risk: **R1055** (mass returns from eastern Chad to West Darfur).
+
+<p align="center">
+  <img src="docs/screenshots/moderator-risks.png" width="260" alt="Moderator view: ACAPS risks with expert answers and new comments to review">
+  &nbsp;
+  <img src="docs/screenshots/moderator-experts.png" width="260" alt="Moderator view: the expert panel with trust signals and points">
+  &nbsp;
+  <img src="docs/screenshots/rating.png" width="260" alt="Super estimator rating: experts ranked by points and forecast accuracy">
+</p>
+<p align="center"><sub>Moderator: risks to review · the expert panel · the super estimator rating as experts see it</sub></p>
 
 ---
 
@@ -30,13 +39,13 @@ Mapped to the MoSCoW list in [`docs/evaluation-criteria.md`](docs/evaluation-cri
 | **Should not** | Engagement metrics as the goal; AI chatbot feel | Points reward accuracy (Brier score) and comments ACAPS found useful, not time in the app. No chatbot: experts answer structured questions and read colleagues' comments | [`app/lib/store.dart`](app/lib/store.dart) (`Points`, `Award`) |
 | **Could** | Super estimator scoreboard | Accuracy = 100 × (1 − Brier) per matured forecast. "Bar to beat": ACAPS's own ratings scored the same way. Top 3 by Brier become *Super estimator* | [`app/lib/screens/home.dart`](app/lib/screens/home.dart) |
 | **Could** | Where experts agree and disagree, incl. geography | Group view with the median and spread, and **"No clear group view: opinions split"** when the middle half spans 2+ steps (ACAPS's 1, 1, 5, 5 example). Respondents split into experts from the risk country and from elsewhere; a *Who?* sheet on comments shows where agreeing and disagreeing experts are from. Moderators sort by *experts most split* and *disagreement with ACAPS*. Ranking by country or region | `GroupView` in [`app/lib/models.dart`](app/lib/models.dart), [`app/lib/screens/survey.dart`](app/lib/screens/survey.dart) |
-| **Could** | Mobile and low bandwidth | Built for phones: Android app, and a web version that opens full screen on a phone (and in a phone frame on a computer). Portrait only, light vibration on choices, search stays above the keyboard. No images and no web fonts: ACAPS graphics are drawn in code and the two ACAPS typefaces are bundled (~120 KB). The last risks loaded stay on the device, so the app opens offline | [`app/lib/theme.dart`](app/lib/theme.dart), [`app/lib/brand.dart`](app/lib/brand.dart), [`app/web/`](app/web/) |
+| **Could** | Mobile and low bandwidth | Built for phones: an Android app (APK), and a web version that opens full screen on a phone (and in a phone frame on a computer). Portrait only, light vibration on choices, search stays above the keyboard. No images and no web fonts: ACAPS graphics are drawn in code and the two ACAPS typefaces are bundled (~120 KB). The last risks loaded stay on the device, so the app opens offline | [`app/lib/theme.dart`](app/lib/theme.dart), [`app/lib/brand.dart`](app/lib/brand.dart), [`app/web/`](app/web/) |
 | **Could** | French and other languages | Not yet. Planned for the pilot | — |
 | **Can** | AI behind the scenes for moderators | Not built on purpose for the hackathon: with 5-10 experts and a few short comments per risk, a moderator reads them in a minute, and expert comments should not leave Europe without a clear data agreement. Next step once panels grow: theme grouping of comments with links back to the source comments, minority views shown separately, moderator approves the draft | — |
 
 ### Use of the Risk Radar data
 
-- The risks are ACAPS's **live Risk Radar**: [`scripts/sync_risks.dart`](scripts/sync_risks.dart) copies the ACAPS API into the Supabase `risks` table, and the app reads that table (real titles, triggers, ACAPS probability, impact, risk level, categories and outcomes). The Risks tab shows the source and when it was last updated.
+- The risks are ACAPS's **live Risk Radar**: [`scripts/sync_risks.dart`](scripts/sync_risks.dart) copies the ACAPS API into the Supabase `risks` table every week ([GitHub Action](.github/workflows/weekly-risk-sync.yml)), and the app reads that table (real titles, triggers, ACAPS probability, impact, risk level, categories and outcomes). The Risks tab shows the source and when it was last updated.
 - The sync writes only what changed. A risk ACAPS closes (e.g. Active → Materialised) moves to the archive, and the forecasts already given on it get scored.
 - Expert forecasts on **resolved risks are scored against what really happened**, and so are ACAPS's own ratings, so experts are compared with ACAPS on the same risks.
 - Expert input goes back to ACAPS as JSON with the Risk Radar field names, so it can be joined to ACAPS's own data.
@@ -58,21 +67,20 @@ The app runs on **Supabase** ([`supabase/`](supabase/README.md)):
 ```
 HFG8-ACAPS-Ground-Truth/
 ├── README.md                ← You are here: what we built and how it meets the criteria
-├── app/                     ← THE APP (Flutter: Android phones + web). Start here
+├── app/                     ← THE APP (Flutter: Android APK + web). Start here
 │   ├── lib/                 ← screens/, models, store (state), identity (anonymity rules), auth (Supabase accounts and codes), risk_source
 │   ├── test/                ← anonymity rules, trigger parser, moderator smoke test (with a snapshot of the risks table)
 │   ├── tool/                ← Supabase keys for `flutter run`, anonymity check
+│   ├── android/             ← Android project (app ID, icon, release signing)
 │   ├── web/                 ← web page: loading screen, phone frame on computers
 │   └── run.ps1              ← starts the app with the Supabase keys
 ├── supabase/                ← Backend: SQL migrations (schema, row-level security, Brier views) and setup guide
-├── scripts/                 ← ACAPS Risk Radar API → Supabase sync (and the older CSV loader)
-├── auth-lab/                ← Small test app for invite codes, sign-up and login (Supabase)
-├── .github/workflows/       ← Live demo: builds app/ and publishes it on GitHub Pages
+├── scripts/                 ← sync_risks.dart: ACAPS Risk Radar API → Supabase
+├── .github/workflows/       ← live demo on GitHub Pages; weekly risk sync
 │
-├── docs/                    ← Challenge brief, methodology, data dictionary, evaluation criteria (from ACAPS)
+├── docs/                    ← Challenge brief, methodology, data dictionary, evaluation criteria (from ACAPS); screenshots
 ├── data/                    ← Risk Radar export, CSV + XLSX (from ACAPS)
-├── references/              ← ACAPS methodology PDF and infographic
-└── notebooks/               ← Starter data exploration notebook
+└── references/              ← ACAPS methodology PDF and infographic
 ```
 
 ## Run it
@@ -80,17 +88,17 @@ HFG8-ACAPS-Ground-Truth/
 | What | How |
 |---|---|
 | Live demo | https://timurkambarov.github.io/HFG8-ACAPS-Ground-Truth/ (add `?frame=off` for the full page on a computer) |
-| The app | `./app/run.ps1 -Device <device-id>` with `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` in the git-ignored `API.key` (Flutter 3.22+). In VS Code: *Run and Debug* → **app (phone)**. Details, Android over Wi-Fi and tests: [`app/README.md`](app/README.md) |
+| Android APK | Build and sign it as in [`app/README.md` → Build the APK](app/README.md#build-the-apk), then share the `.apk` file |
+| Run while developing | `./app/run.ps1 -Device <device-id>` with `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` in the git-ignored `API.key` (Flutter 3.22+). In VS Code: *Run and Debug* → **app (phone)**. Details and tests: [`app/README.md`](app/README.md) |
 | Log in as | First moderator: *I have a code* → `GT-ACAPS-MOD1`. Moderators then send single-use invite codes; each expert gets a `REF-…` referral code on their Profile |
-| Update the risks | `dart run scripts/sync_risks.dart` (needs the secret key and an ACAPS API account, see the script) |
+| Update the risks | Automatic every Monday ([`weekly-risk-sync.yml`](.github/workflows/weekly-risk-sync.yml)), or by hand: `dart run scripts/sync_risks.dart` |
 | Backend | See [`supabase/README.md`](supabase/README.md) |
-| Live demo setup | See the top of [`.github/workflows/deploy-demo.yml`](.github/workflows/deploy-demo.yml) |
-| Data notebook | `pip install -r requirements.txt && jupyter notebook notebooks/data-exploration.ipynb` |
+| GitHub Actions setup | Repository secrets, listed at the top of [`deploy-demo.yml`](.github/workflows/deploy-demo.yml) and [`weekly-risk-sync.yml`](.github/workflows/weekly-risk-sync.yml) |
 
 ## What's next
 
 - Answers, comments and points in Supabase too (the tables exist), so moderators see every expert's input in one place.
-- Run the risk sync on a schedule instead of by hand.
+- An iOS version (the Flutter code is shared; it needs an Apple developer account to distribute).
 - French and other working languages of field experts.
 - Real push notifications and a vetting step for referred experts.
 - AI support for moderators, as described in the criteria table.
@@ -114,7 +122,7 @@ Ground Truth covers both directions.
 
 ### The data
 
-The ACAPS Risk Radar export contains **139 humanitarian risks** across **57 countries**, with the full lifecycle of each risk: the risk (title, type, country, triggers), the ACAPS rating (probability, impact, risk level, rationale) and what happened (status, materialisation description). Among resolved risks, about **84% of "High" risks materialised**. See the [data dictionary](docs/data-dictionary.md) and the [starter notebook](notebooks/data-exploration.ipynb). The app uses the live Risk Radar API instead of this export (see above).
+The ACAPS Risk Radar export contains **139 humanitarian risks** across **57 countries**, with the full lifecycle of each risk: the risk (title, type, country, triggers), the ACAPS rating (probability, impact, risk level, rationale) and what happened (status, materialisation description). Among resolved risks, about **84% of "High" risks materialised**. See the [data dictionary](docs/data-dictionary.md). The app uses the live Risk Radar API instead of this export (see above).
 
 ### Key constraints
 
@@ -129,7 +137,7 @@ The ACAPS Risk Radar export contains **139 humanitarian risks** across **57 coun
 
 ### Resources
 
-- [Full challenge brief](docs/challenge-brief.md) · [Risk methodology](docs/risk-methodology.md) · [Data dictionary](docs/data-dictionary.md) · [Evaluation criteria](docs/evaluation-criteria.md) · [Resources and inspiration](docs/resources.md)
+- [Full challenge brief](docs/challenge-brief.md) ([PDF](docs/challenge-brief.pdf)) · [Risk methodology](docs/risk-methodology.md) · [Data dictionary](docs/data-dictionary.md) · [Evaluation criteria](docs/evaluation-criteria.md) · [Resources and inspiration](docs/resources.md)
 - [ACAPS Risk List](https://www.acaps.org/en/thematics/all-topics/risk-list) (live data) · [ACAPS API](https://api.acaps.org)
 
 ## License

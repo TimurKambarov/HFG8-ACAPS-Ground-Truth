@@ -1,29 +1,22 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-dist/
-build/
-*.egg
-.eggs/
+# Flutter/Dart build output inside app/ is ignored by app/.gitignore.
 
-# Virtual environments
-venv/
-env/
-.venv/
+# Secrets: never commit keys or the Android signing keystore
+API.key
+*.key
+*.pem
 .env
+.env.*
+key.properties
+*.jks
+*.keystore
 
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb_metadata/
-
-# IDE and AI tools
+# Editors and AI tools (the shared VS Code launch configurations are kept)
 .idea/
-.vscode/
 .claude/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
 *.swp
-*.swo
 *~
 
 # OS
@@ -31,23 +24,10 @@ env/
 Thumbs.db
 desktop.ini
 
-# Node (if teams use JS/TS)
-node_modules/
-package-lock.json
-yarn.lock
+# Scripts
+.dart_tool/
+__pycache__/
 
-# Data artifacts (keep original data, ignore generated)
-*.tmp
-*.bak
-
-# Secrets
-.env
-.env.local
-*.key
-*.pem
-
-# Supabase backend (migrations, scripts): kept out of the repo
-/supabase/
-
-# Old phone app folder (moved to app/): only build leftovers remain locally
+# Removed folders: only local build leftovers remain on some machines
 /app-mobile/
+/auth-lab/

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ACAPS navy (AppColors.navy in lib/theme.dart). -->
+    <color name="ic_launcher_background">#004B78</color>
+    <color name="launch_background">#004B78</color>
+</resources>

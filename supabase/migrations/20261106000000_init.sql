@@ -6,7 +6,7 @@
 -- Safe to re-run: every object is created with IF NOT EXISTS / OR REPLACE.
 --
 -- Layout
---   Reference data (loaded by scripts/load_risks_to_supabase.py, read-only for users)
+--   Reference data (written by scripts/sync_risks.dart, read-only for users)
 --     risks, risk_countries, risk_triggers
 --   Users (passwords / sessions live in Supabase Auth: auth.users — never here)
 --     profiles, invite_codes

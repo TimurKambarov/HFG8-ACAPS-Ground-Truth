@@ -11,20 +11,19 @@ The root [README.md](README.md) maps every evaluation criterion to the code.
 ## Repo Structure
 
 ```
-app/            → THE APP (Flutter: Android phones + web). Portrait, phone layouts only
+app/            → THE APP (Flutter: Android APK + web). Portrait, phone layouts only
   lib/          → screens/, models.dart, store.dart (state), identity.dart (anonymity rules),
                   auth.dart (Supabase accounts, invite/referral codes), risk_source.dart (reads the risks table)
   test/         → anonymity rules, parser, moderator smoke test; fixtures/risks.json = snapshot of the risks table
   tool/         → supabase_keys.dart (keys for flutter run), identity_check.dart
+  android/      → app ID io.github.timurkambarov.groundtruth, launcher icon, release signing (key.properties)
   web/          → index.html + flutter_bootstrap.js: loading screen; phone frame on wide screens
-auth-lab/       → Test app for invite codes, sign-up and login (Supabase)
 supabase/       → Backend: SQL migrations (schema, row-level security, Brier views), setup guide
-scripts/        → sync_risks.dart: ACAPS Risk Radar API → Supabase (secret key); older CSV loader
-.github/        → deploy-demo.yml: builds app/ for web and publishes it on GitHub Pages
-docs/           → Challenge brief, methodology, data dictionary, evaluation criteria (from ACAPS)
+scripts/        → sync_risks.dart: ACAPS Risk Radar API → Supabase (secret key)
+.github/        → deploy-demo.yml (web build → GitHub Pages), weekly-risk-sync.yml (runs sync_risks.dart)
+docs/           → Challenge brief, methodology, data dictionary, evaluation criteria (from ACAPS); screenshots/
 data/           → Risk Radar export (CSV + XLSX)
 references/     → ACAPS methodology PDF and infographic
-notebooks/      → Starter data exploration notebook
 ```
 
 ## Run
@@ -32,6 +31,7 @@ notebooks/      → Starter data exploration notebook
 ```powershell
 ./app/run.ps1 -Device <device-id>   # passes SUPABASE_URL + SUPABASE_PUBLISHABLE_KEY from API.key
 cd app; flutter test                # never calls Supabase
+# APK: see "Build the APK" in app/README.md (needs --dart-define-from-file with the Supabase keys)
 ```
 
 In VS Code: *Run and Debug* → **app (phone)** or **app (Edge, dev only)**. Details: [app/README.md](app/README.md), [supabase/README.md](supabase/README.md).

@@ -127,4 +127,4 @@ Among resolved risks (status = Materialised or Not materialised):
 - ~**47%** of "Medium" rated risks materialised (27/58)
 - "Low" rated risks have only 3 resolved records — too few for reliable rates
 
-You can validate and explore this using the `Risk Level` and `Status` fields. The [starter notebook](../notebooks/data-exploration.ipynb) includes code to compute these rates. Use them to test scoring methods for a "super estimator" scoreboard.
+You can validate and explore this using the `Risk Level` and `Status` fields. Use them to test scoring methods for a "super estimator" scoreboard.

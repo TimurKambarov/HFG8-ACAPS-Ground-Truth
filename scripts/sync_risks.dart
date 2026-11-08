@@ -3,8 +3,7 @@
 // =============================================================================
 //
 // Pulls every risk from the live ACAPS API and upserts it into the Supabase
-// tables `risks`, `risk_countries` and `risk_triggers` (same columns as
-// scripts/load_risks_to_supabase.py, which loads the CSV export instead).
+// tables `risks`, `risk_countries` and `risk_triggers`.
 // The Flutter app reads those tables, so after a run every user sees the
 // current Risk Radar: new risks appear, closed risks move to the Archive.
 //
@@ -267,8 +266,10 @@ Map<String, String> _credentials() {
     }
   }
   // Environment variables win (GitHub Actions passes its secrets this way).
+  // Trimmed: a secret pasted with a trailing line break would break the URL
+  // or the login.
   for (final k in ['SUPABASE_URL', 'SUPABASE_SECRET_KEY', 'ACAPS_EMAIL', 'ACAPS_PASSWORD']) {
-    final v = Platform.environment[k];
+    final v = Platform.environment[k]?.trim();
     if (v != null && v.isNotEmpty) out[k] = v;
   }
   return out;

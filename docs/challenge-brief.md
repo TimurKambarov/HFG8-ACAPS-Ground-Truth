@@ -1,6 +1,6 @@
 # Ground Truth: A Trusted Expert Loop for Humanitarian Risk Analysis
 
-> **Full PDF:** [`ACAPS Challenge Brief HFG#8.pdf`](ACAPS%20Challenge%20Brief%20HFG%238.pdf)
+> **Full PDF:** [`challenge-brief.pdf`](challenge-brief.pdf)
 >
 > **Challenge:** Humanitarian Risk
 > **Hackathon:** Hackathon for Good #8
@@ -170,7 +170,7 @@ The published risk list, released monthly, via the ACAPS API (free account, toke
 
 ### Why This Data Matters
 
-Because the export records what actually happened to earlier risks, you can **test ideas against real outcomes**. For example, among resolved risks, roughly **eight in ten** of those ACAPS rated "High" materialised. Higher-rated risks materialise at significantly higher rates than lower-rated ones. Use this to simulate expert estimates, build and test a scoring method for your scoreboard, or show experts how past analyses played out. Run the starter notebook to see the exact rates by level.
+Because the export records what actually happened to earlier risks, you can **test ideas against real outcomes**. For example, among resolved risks, roughly **eight in ten** of those ACAPS rated "High" materialised. Higher-rated risks materialise at significantly higher rates than lower-rated ones. Use this to simulate expert estimates, build and test a scoring method for your scoreboard, or show experts how past analyses played out.
 
 **A live example to build your demo around:** risk **R1043**, *"Escalating cross-border insecurity linked to the Sudan conflict increases protection risks and humanitarian needs in eastern Chad"*, currently active and rated high.
 
