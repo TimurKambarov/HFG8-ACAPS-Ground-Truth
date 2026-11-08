@@ -1,40 +1,32 @@
 {
-  // Run and Debug configurations for the two Flutter apps.
+  // Run and Debug configurations for the Flutter app in app/.
   // The target device is whatever is selected in the VS Code status bar
-  // (e.g. your phone over wireless debugging, or Edge for the web).
+  // (e.g. your phone over wireless debugging, or an Android emulator).
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "app-mobile (phone)",
-      "cwd": "app-mobile",
-      "program": "lib/main.dart",
-      "request": "launch",
-      "type": "dart",
-      "flutterMode": "debug"
-    },
-    {
-      "name": "app (reference)",
+      // Real accounts and ACAPS's risks: the task passes only SUPABASE_URL and
+      // SUPABASE_PUBLISHABLE_KEY from ../API.key (never the secret key).
+      "name": "app (phone)",
       "cwd": "app",
       "program": "lib/main.dart",
       "request": "launch",
       "type": "dart",
-      "flutterMode": "debug"
+      "flutterMode": "debug",
+      "preLaunchTask": "Supabase keys (app)",
+      "toolArgs": ["--dart-define-from-file=.dart_tool/supabase_keys.json"]
     },
     {
-      "name": "app (Edge)",
+      // Quick look on the desktop without a phone. The app is built for phones;
+      // Edge is only a convenience for development.
+      "name": "app (Edge, dev only)",
       "cwd": "app",
       "program": "lib/main.dart",
       "request": "launch",
       "type": "dart",
-      "deviceId": "edge"
-    },
-    {
-      "name": "app-mobile (Edge)",
-      "cwd": "app-mobile",
-      "program": "lib/main.dart",
-      "request": "launch",
-      "type": "dart",
-      "deviceId": "edge"
+      "deviceId": "edge",
+      "preLaunchTask": "Supabase keys (app)",
+      "toolArgs": ["--dart-define-from-file=.dart_tool/supabase_keys.json"]
     }
   ]
 }

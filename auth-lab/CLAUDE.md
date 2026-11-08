@@ -2,8 +2,7 @@
 
 Context for AI assistants and developers continuing work on **auth-lab**: a small Flutter app
 (Android + web) that tests invite codes, sign-up and login against the real Supabase project.
-It is deliberately separate from `../app/` and `../app-mobile/` (those are local demo apps with
-no Supabase connection yet). Human-facing setup and test steps are in [README.md](README.md).
+It is deliberately separate from `../app/` (the phone app). Human-facing setup and test steps are in [README.md](README.md).
 
 Status as of 2026-11-07: working on a real phone over wireless debugging. Nothing is committed to git yet.
 
@@ -35,7 +34,7 @@ Status as of 2026-11-07: working on a real phone over wireless debugging. Nothin
 - **Moderators** come only from moderator invite codes (`role = 'moderator'` on `invite_codes`).
   They are always `known_to_acaps` with a real name (DB constraint `moderator_is_named`).
 - **Pseudonym = login name, so it is fixed after sign-up.** Format `^[A-Za-z0-9][A-Za-z0-9_-]{2,29}$`,
-  unique case-insensitively. This rule is mirrored in `../app/` and `../app-mobile/`
+  unique case-insensitively. This rule is mirrored in `../app/`
   (`identity.dart` → `pseudonymPattern`, profile pseudonym field read-only).
 - **No forgot-password flow** yet (out of scope for now).
 
@@ -94,13 +93,13 @@ clash, Sudan code, expired / used-up codes (`update invite_codes set max_uses = 
 - Synthetic users only (repo rule, see `../CLAUDE.md`).
 - Schema changes go in a **new** migration file in `../supabase/migrations/`, written to be safe to re-run.
   Update `../supabase/README.md` when tables or auth behaviour change.
-- Run `flutter analyze` in `auth-lab/`, `app/` and `app-mobile/` after changes. All three are clean now.
+- Run `flutter analyze` in `auth-lab/` and `app/` after changes. Both are clean now.
 
 ## Likely next steps
 
 - Finish the untested cases above.
-- **Login** is wired into `../app-mobile/` (`lib/auth.dart`, `LoginScreen` in `lib/screens/entry.dart`,
-  started with `app-mobile/run.ps1`). Invite / sign-up for experts and moderators is not wired in yet
+- **Login** is wired into `../app/` (`lib/auth.dart`, `LoginScreen` in `lib/screens/entry.dart`,
+  started with `app/run.ps1`). Invite / sign-up for experts and moderators is not wired in yet
   (the user asked for login only; ask before adding it).
 - Forgot-password: needs the contact email (experts) or real email (moderators) and an email
   provider; not designed yet.

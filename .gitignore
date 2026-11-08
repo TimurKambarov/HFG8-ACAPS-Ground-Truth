@@ -45,3 +45,9 @@ yarn.lock
 .env.local
 *.key
 *.pem
+
+# Supabase backend (migrations, scripts): kept out of the repo
+/supabase/
+
+# Old phone app folder (moved to app/): only build leftovers remain locally
+/app-mobile/

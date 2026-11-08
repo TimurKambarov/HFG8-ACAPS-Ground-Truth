@@ -1,0 +1,17 @@
+{
+  // Background tasks used by launch.json.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // Writes app/.dart_tool/supabase_keys.json with only SUPABASE_URL and
+      // SUPABASE_PUBLISHABLE_KEY from API.key (see app/tool/supabase_keys.dart).
+      // Without API.key it writes {}.
+      "label": "Supabase keys (app)",
+      "type": "shell",
+      "command": "dart run tool/supabase_keys.dart",
+      "options": { "cwd": "${workspaceFolder}/app" },
+      "presentation": { "reveal": "silent" },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -65,6 +65,18 @@ const pseudonymRule = '3-30 letters, digits, - or _. This is also your login nam
 int stableHash(String s) =>
     s.codeUnits.fold<int>(7, (a, b) => (a * 31 + b) % 1000003);
 
+/// How an expert got into the closed group: the door check. Shown to
+/// moderators only, as a trust signal; never to colleagues, the public, or
+/// the expert themselves. It says how they got in, not who they are.
+enum JoinedVia { acapsInvite, expertReferral }
+
+extension JoinedViaText on JoinedVia {
+  String get label => switch (this) {
+        JoinedVia.acapsInvite => 'Invited by ACAPS',
+        JoinedVia.expertReferral => 'Referred by an expert',
+      };
+}
+
 /// An expert record as stored in the database. All demo experts are synthetic.
 class Expert {
   final String id;
@@ -92,12 +104,16 @@ class Expert {
   final double participation;
   final double skill;
 
-  /// Token of this expert's permanent referral link (one per expert, any
+  /// This expert's permanent referral code (one per expert, any
   /// number of colleagues can join with it). Assigned by the store.
   String referralCode;
 
+  /// Moderator invite or expert referral. Set once, at registration.
+  final JoinedVia joinedVia;
+
   Expert({
     this.referralCode = '',
+    this.joinedVia = JoinedVia.acapsInvite,
     required this.id,
     required this.realName,
     required this.pseudonym,
@@ -150,6 +166,7 @@ class Expert {
         'participation': participation,
         'skill': skill,
         'referral_code': referralCode,
+        'joined_via': joinedVia == JoinedVia.acapsInvite ? 'acaps_invite' : 'expert_referral',
       };
 
   factory Expert.fromJson(Map<String, dynamic> m) => Expert(
@@ -167,6 +184,8 @@ class Expert {
         participation: (m['participation'] as num?)?.toDouble() ?? 0.8,
         skill: (m['skill'] as num?)?.toDouble() ?? 0.5,
         referralCode: (m['referral_code'] as String?) ?? '',
+        // Saved before this existed: everyone had joined with an ACAPS invite.
+        joinedVia: m['joined_via'] == 'expert_referral' ? JoinedVia.expertReferral : JoinedVia.acapsInvite,
       );
 }
 

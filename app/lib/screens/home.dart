@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../brand.dart';
 import '../models.dart';
 import '../store.dart';
+import '../theme.dart';
 import '../widgets.dart';
 import 'profile.dart';
+import 'risk_filter.dart';
 import 'survey.dart';
 
 class HomeShell extends StatefulWidget {
@@ -91,12 +94,11 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        bottom: false,
-        child: IndexedStack(
-          index: _tab,
-          children: const [InboxTab(), ForecastsTab(), RatingTab(), ProfileTab()],
-        ),
+      // No SafeArea on top: each tab starts with a navy header that runs
+      // under the status bar and pads itself.
+      body: IndexedStack(
+        index: _tab,
+        children: const [InboxTab(), ForecastsTab(), RatingTab(), ProfileTab()],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
@@ -127,66 +129,91 @@ class _InboxTabState extends State<InboxTab> {
   bool _allArchive = false;
   bool _archiveMineOnly = false;
   final _search = TextEditingController();
-  String _q = '';
+
+  /// The same search, filters and sort as the moderators' Risks tab.
+  final _filter = RiskFilter(defaultSort: RiskSort.recommended);
 
   @override
   void dispose() {
     _search.dispose();
+    _filter.dispose();
     super.dispose();
   }
-
-  /// Same matching as the moderator's risk search: ID (or just its number),
-  /// title or country.
-  bool _matches(Risk r) =>
-      _q.isEmpty || '${r.id} ${r.title} ${r.oneLiner} ${r.country}'.toLowerCase().contains(_q.toLowerCase());
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     return ListenableBuilder(
-      listenable: appState,
+      listenable: Listenable.merge([appState, _filter]),
       builder: (context, _) {
         final me = appState.me;
         if (me == null) return const SizedBox();
-        final searching = _q.trim().isNotEmpty;
+        final f = _filter;
+        if (_search.text != f.query) _search.text = f.query;
+        final searching = f.active;
         final note = searching ? null : appState.pendingNotification;
-        final active = appState.activeForMe().where(_matches).toList();
-        final allClosed = appState.archiveForMe().where(_matches).toList();
+        final active = f.applyBasic(appState.activeForMe());
+        final allClosed = f.applyBasic(appState.archiveForMe());
         final mineClosed = allClosed.where((r) => appState.relevantTo(me, r)).toList();
         final archive = _archiveMineOnly ? mineClosed : allClosed;
-        // While searching, show every match.
+        // While searching or filtering, show every match.
         final shownArchive = _allArchive || searching ? archive : archive.take(5);
+        final n = f.sheetCount;
 
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-          children: [
-            Text('Hi, ${displayName(me, appState.viewer)}', style: t.headlineSmall),
-            const SizedBox(height: 4),
-            Text('Your countries: ${([me.homeCountry, ...me.interests]).join(', ')}', style: t.bodySmall),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _search,
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search),
-                hintText: 'Search ID, title or country',
-                isDense: true,
-                suffixIcon: searching
-                    ? IconButton(
-                        tooltip: 'Clear search',
-                        icon: const Icon(Icons.close),
-                        onPressed: () => setState(() {
-                          _search.clear();
-                          _q = '';
-                        }),
-                      )
-                    : null,
+        return BrandPage(
+          header: BrandHeader(
+            eyebrow: 'ACAPS · Risk radar',
+            title: 'Hi, ${displayName(me, appState.viewer)}',
+            subtitle: 'Your countries: ${([me.homeCountry, ...me.interests]).join(', ')}',
+            seed: 11,
+            children: [
+              // Search + filter button, exactly as on the moderators' Risks tab.
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _search,
+                      decoration: const InputDecoration(
+                          prefixIcon: Icon(Icons.search), hintText: 'Search ID, title, country or category', isDense: true),
+                      onChanged: (v) => f.update((x) => x.query = v),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Badge(
+                    isLabelVisible: n > 0,
+                    label: Text('$n'),
+                    child: IconButton.filledTonal(
+                      tooltip: 'Filter and sort',
+                      onPressed: () => showRiskFilterSheet(context, f, moderator: false),
+                      icon: const Icon(Icons.tune),
+                    ),
+                  ),
+                ],
               ),
-              onChanged: (v) => setState(() => _q = v),
+            ],
+          ),
+          children: [
+            // Where the risks come from (Supabase / offline copy) + Refresh.
+            const Padding(padding: EdgeInsets.only(top: 6), child: RiskSourceLine()),
+            Padding(
+              padding: const EdgeInsets.only(top: 2, bottom: 2),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${active.length + allClosed.length} ${active.length + allClosed.length == 1 ? 'risk' : 'risks'} · ${f.sort.label.toLowerCase()}',
+                      style: t.labelLarge,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (searching) TextButton(onPressed: () => f.update((x) => x.clear()), child: const Text('Clear')),
+                ],
+              ),
             ),
             if (searching && active.isEmpty && allClosed.isEmpty)
               Padding(
-                padding: const EdgeInsets.only(top: 16),
-                child: Text('No risks match "${_q.trim()}". Try a risk number (e.g. 1043), a word from the title, or a country.',
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('No risks match. Try a risk number (e.g. 1055), a word from the title, a country or a category.',
                     style: t.bodyMedium),
               ),
             // Slides away after "Not now", so it is obvious the tap worked.
@@ -261,43 +288,61 @@ class _Notification extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final n = risk.surveyItems.length;
+    final plain = cs.outlineVariant == Colors.white; // high contrast
+    const fg = Colors.white;
+    // A navy block like the website's "NEW ANALYSIS" hero.
     return Reveal(
-      child: Card(
-        margin: EdgeInsets.zero,
-        color: cs.primary.withAlpha(22),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: cs.primary.withAlpha(120))),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+      child: Material(
+        color: plain ? Colors.black : (cs.brightness == Brightness.light ? AppColors.navy : AppColors.navyNight),
+        shape: plain ? const Border.fromBorderSide(BorderSide(color: Colors.white, width: 2)) : null,
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          children: [
+            Positioned.fill(child: TopoLines(color: Colors.white.withAlpha(26), seed: 5, scale: 120)),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.notifications_active_outlined, color: cs.primary),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text('ACAPS updated a risk · now', style: t.labelMedium)),
-                  Text('${risk.id} · ${risk.country}', style: t.labelSmall),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Text(risk.title, maxLines: 4, overflow: TextOverflow.ellipsis, style: t.titleMedium),
-              const SizedBox(height: 6),
-              Text('Got 2 minutes? ${n + 1} short screens: ${n == 1 ? 'the risk' : '$n triggers'}, then one forecast.',
-                  style: t.bodyMedium),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  TextButton(onPressed: () => notNow(context, risk), child: const Text('Not now')),
-                  const Spacer(),
-                  FilledButton(
-                    style: FilledButton.styleFrom(minimumSize: const Size(120, 44)),
-                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SurveyScreen(risk: risk))),
-                    child: const Text('Open'),
+                  Row(
+                    children: [
+                      const PinMark(height: 18, color: AppColors.tealBright, dotColor: fg),
+                      const SizedBox(width: 8),
+                      const Expanded(child: Eyebrow('ACAPS updated a risk · now', color: fg)),
+                      Text('${risk.id} · ${risk.country}', style: TextStyle(fontSize: 12.5, color: fg.withAlpha(210))),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(risk.title, maxLines: 4, overflow: TextOverflow.ellipsis, style: t.titleMedium?.copyWith(color: fg)),
+                  const SizedBox(height: 10),
+                  const AccentBar(width: 32, color: AppColors.tealBright),
+                  const SizedBox(height: 10),
+                  Text('Got 2 minutes? ${n + 1} short screens: ${n == 1 ? 'the risk' : '$n triggers'}, then one forecast.',
+                      style: t.bodyMedium?.copyWith(color: fg.withAlpha(225))),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      TextButton(
+                        style: TextButton.styleFrom(foregroundColor: fg),
+                        onPressed: () => notNow(context, risk),
+                        child: const Text('Not now'),
+                      ),
+                      const Spacer(),
+                      FilledButton(
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(120, 44),
+                          backgroundColor: fg,
+                          foregroundColor: AppColors.navy,
+                        ),
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SurveyScreen(risk: risk))),
+                        child: const Text('Open'),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -335,20 +380,22 @@ class ForecastsTab extends StatelessWidget {
           ..sort((a, b) => (a.response?.resolvesBy ?? DateTime(3000)).compareTo(b.response?.resolvesBy ?? DateTime(3000)));
         final matured = entries.where((e) => e.risk.isResolved).toList()..sort((a, b) => when(b.response).compareTo(when(a.response)));
 
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        return BrandPage(
+          header: BrandHeader(
+            eyebrow: 'Your track record',
+            title: 'My forecasts',
+            subtitle: 'How good your forecasts are, and what ACAPS did with your comments.',
+            seed: 23,
+            actions: [
+              IconButton(
+                tooltip: 'How scoring works',
+                icon: const Icon(Icons.info_outline),
+                onPressed: () => showScoringHelp(context),
+              ),
+            ],
+          ),
           children: [
-            Row(
-              children: [
-                Expanded(child: Text('My forecasts', style: t.headlineSmall)),
-                IconButton(
-                  tooltip: 'How scoring works',
-                  icon: const Icon(Icons.info_outline),
-                  onPressed: () => showScoringHelp(context),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 16),
             _TrackRecord(me: me, responses: responses.values.toList(), comments: myComments),
             SectionLabel('Waiting for the outcome · ${open.length}'),
             if (open.isEmpty)
@@ -402,12 +449,12 @@ class _TrackRecord extends StatelessWidget {
 
     return Card(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Forecasting', style: t.labelLarge),
-            const SizedBox(height: 8),
+            const Eyebrow('Forecasting'),
+            const SizedBox(height: 12),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -421,20 +468,20 @@ class _TrackRecord extends StatelessWidget {
                 _Stat(value: '${st.points}', label: 'total points'),
               ],
             ),
-            const Divider(height: 24),
-            Text('Your comments', style: t.labelLarge),
-            const SizedBox(height: 8),
+            const Divider(height: 28),
+            const Eyebrow('Your comments'),
+            const SizedBox(height: 12),
             Row(
               children: [
                 _Stat(value: '$useful', label: 'marked useful'),
                 _Stat(value: '$used', label: 'used in analysis'),
               ],
             ),
-            const Divider(height: 24),
+            const Divider(height: 28),
             Row(
               children: [
                 if (superEstimator) ...[const AwardIcon(Award.superEstimator, size: 26), const SizedBox(width: 10)] else ...[
-                  Icon(Icons.track_changes, size: 22, color: cs.primary),
+                  Icon(Icons.track_changes, size: 22, color: cs.brightness == Brightness.light ? AppColors.teal : cs.primary),
                   const SizedBox(width: 10),
                 ],
                 Expanded(child: Text(status, style: t.bodyMedium)),
@@ -469,7 +516,7 @@ class _MyRiskCard extends StatelessWidget {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: InkWell(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(4),
           onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SurveyScreen(risk: r, start: SurveyStart.summary))),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -479,22 +526,14 @@ class _MyRiskCard extends StatelessWidget {
       );
     }
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
+    return EdgeCard(
+      edge: levelColor(r.level),
+      child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  Expanded(
-                    child: Text('${r.id} · ${r.country}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: cs.onSurfaceVariant)),
-                  ),
+                  Expanded(child: Eyebrow('${r.id} · ${r.country}')),
                   if (resp != null)
                     Pill('Matures ${formatDate(resp.resolvesBy)}', icon: Icons.hourglass_top),
                 ],
@@ -571,8 +610,6 @@ class _MyRiskCard extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
     );
   }
 }
@@ -593,10 +630,14 @@ class _MyComment extends StatelessWidget {
       if (c.useful) ('Marked useful by ACAPS · +${Points.usefulComment}', Icons.lightbulb_outline),
       if (c.usedInRiskId != null) ('Used in the analysis of ${c.usedInRiskId} · +${Points.usedComment}', Icons.push_pin_outlined),
     ];
+    // Quote style: a teal bar on the left, as on the website's blockquotes.
     return Container(
       margin: const EdgeInsets.only(top: 10),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: cs.surfaceContainerHighest.withAlpha(150), borderRadius: BorderRadius.circular(12)),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withAlpha(cs.brightness == Brightness.light ? 110 : 150),
+        border: Border(left: BorderSide(color: cs.brightness == Brightness.light ? AppColors.teal : cs.primary, width: 3)),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -638,18 +679,7 @@ class _Stat extends StatelessWidget {
   const _Stat({required this.value, required this.label, this.note});
 
   @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(value, style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 2),
-          Text(label, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
-          if (note != null) ...[const SizedBox(height: 3), note!],
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Expanded(child: KeyFigure(value: value, label: label, note: note));
 }
 
 /// "+7% vs ACAPS": my accuracy minus ACAPS's on exactly the risks I
@@ -665,9 +695,9 @@ class _VsAcaps extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final diff = accuracyPct(mine) - accuracyPct(acaps);
     final (text, color) = diff > 0
-        ? ('+$diff% vs ACAPS', agreementColors[Agreement.yes]!) // green: better than ACAPS
+        ? ('+$diff% vs ACAPS', readable(agreementColors[Agreement.yes]!)) // green: better than ACAPS
         : diff < 0
-            ? ('$diff% vs ACAPS', agreementColors[Agreement.no]!) // red: below ACAPS
+            ? ('$diff% vs ACAPS', readable(agreementColors[Agreement.no]!)) // red: below ACAPS
             : ('same as ACAPS', cs.onSurfaceVariant);
     return Tooltip(
       message: 'ACAPS\'s own ratings on the same $risks ${risks == 1 ? 'risk' : 'risks'}, scored the same way, '
@@ -729,31 +759,43 @@ class _RatingTabState extends State<RatingTab> {
         final acaps = rows.firstWhere((r) => r.expert == null);
         final countries = appState.countries;
 
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        return BrandPage(
+          header: BrandHeader(
+            eyebrow: 'Super estimators',
+            title: 'Rating',
+            subtitle: 'Ranked by points. Accuracy is scored the same way as ACAPS\'s own ratings.',
+            seed: 31,
+            actions: [
+              IconButton(
+                tooltip: 'How scoring works',
+                icon: const Icon(Icons.info_outline),
+                onPressed: () => showScoringHelp(context),
+              ),
+            ],
+          ),
           children: [
-            Row(
-              children: [
-                Expanded(child: Text('Rating', style: t.headlineSmall)),
-                IconButton(
-                  tooltip: 'How scoring works',
-                  icon: const Icon(Icons.info_outline),
-                  onPressed: () => showScoringHelp(context),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: SegmentedButton<RatingScope>(
-                showSelectedIcon: false,
-                segments: [
-                  ButtonSegment(value: RatingScope.country, label: Text(me == null ? 'Country' : 'My country'), icon: const Icon(Icons.place_outlined)),
-                  ButtonSegment(value: RatingScope.region, label: Text(me == null ? 'Region' : 'My region'), icon: const Icon(Icons.map_outlined)),
-                  const ButtonSegment(value: RatingScope.all, label: Text('All'), icon: Icon(Icons.public)),
+            const SizedBox(height: 16),
+            // Chips in a row that scrolls sideways: three segments do not fit
+            // a narrow phone at large text sizes.
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final (sc, label, icon) in [
+                    (RatingScope.country, me == null ? 'Country' : 'My country', Icons.place_outlined),
+                    (RatingScope.region, me == null ? 'Region' : 'My region', Icons.map_outlined),
+                    (RatingScope.all, 'All countries', Icons.public),
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        avatar: Icon(icon, size: 18),
+                        label: Text(label),
+                        selected: _scope == sc,
+                        onSelected: (_) => setState(() => _scope = sc),
+                      ),
+                    ),
                 ],
-                selected: {_scope},
-                onSelectionChanged: (v) => setState(() => _scope = v.first),
               ),
             ),
             if (_scope != RatingScope.all) ...[
@@ -809,8 +851,7 @@ class _RatingTabState extends State<RatingTab> {
             _PointsRow(icon: Icons.push_pin_outlined, text: '+${Points.usedComment}: your comment is used in the analysis of another risk'),
             _PointsRow(
               icon: Icons.group_add_outlined,
-              text: '+${Points.referral}: a colleague joins with your referral link (Profile). '
-                  'Demo: when they register. Pilot: once they have answered ${Points.referralAnswersInPilot} risks.',
+              text: '+${Points.referral}: a colleague signs up with your referral code (Profile).',
             ),
             const SectionLabel('Badges'),
             for (final b in Award.values)
@@ -840,23 +881,23 @@ class _Benchmark extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
+    final light = cs.brightness == Brightness.light;
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 6),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: cs.outline, width: 1.5, style: BorderStyle.solid),
-        color: cs.surfaceContainerHighest.withAlpha(110),
+        border: Border(left: BorderSide(color: light ? AppColors.navy : cs.primary, width: 4)),
+        color: Color.alphaBlend((light ? AppColors.navy : cs.primary).withAlpha(light ? 14 : 30), cs.surfaceContainerLowest),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.flag_circle_outlined, color: cs.primary),
+              Icon(Icons.flag_circle_outlined, color: light ? AppColors.navy : cs.primary),
               const SizedBox(width: 8),
               Expanded(child: Text('Bar to beat: ACAPS itself', style: t.titleSmall)),
               Text(row.brier == null ? '-' : '${accuracyPct(row.brier!)}%',
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                  style: TextStyle(fontFamily: fontDisplay, fontSize: 30, height: 1.0, color: light ? AppColors.navy : cs.primary)),
             ],
           ),
           const SizedBox(height: 6),
@@ -925,7 +966,7 @@ class _PointsRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
           children: [
-            Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
+            Icon(icon, size: 20, color: Theme.of(context).brightness == Brightness.light ? AppColors.teal : Theme.of(context).colorScheme.primary),
             const SizedBox(width: 10),
             Expanded(child: Text(text)),
           ],
@@ -933,8 +974,8 @@ class _PointsRow extends StatelessWidget {
       );
 }
 
-/// Gold, silver, bronze.
-const _podium = [Color(0xFFE0A800), Color(0xFF9AA4AE), Color(0xFFB8733A)];
+/// Gold, silver, bronze from the ACAPS palette (gold, grey, sand).
+const _podium = [AppColors.gold, Color(0xFFB9BDC1), AppColors.sand];
 
 class _RatingTile extends StatelessWidget {
   final int rank;
@@ -947,17 +988,22 @@ class _RatingTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
+    final light = cs.brightness == Brightness.light;
     final podium = rank <= 3 ? _podium[rank - 1] : null;
-    final bg = podium != null ? podium.withAlpha(48) : (isMe ? cs.primary.withAlpha(26) : cs.surfaceContainerLowest);
-    final border = podium ?? (isMe ? cs.primary : cs.outlineVariant);
+    final accent = light ? AppColors.teal : cs.primary;
+    final bg = podium != null
+        ? Color.alphaBlend(podium.withAlpha(light ? 40 : 34), cs.surfaceContainerLowest)
+        : (isMe ? Color.alphaBlend(accent.withAlpha(24), cs.surfaceContainerLowest) : cs.surfaceContainerLowest);
+    final edge = podium ?? (isMe ? accent : cs.outlineVariant);
 
+    // Leaderboard rows: white, with a coloured edge on the left (podium colour,
+    // teal for you).
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: podium != null ? 14 : 10),
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      padding: EdgeInsets.fromLTRB(10, podium != null ? 12 : 9, 12, podium != null ? 12 : 9),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: border, width: podium != null || isMe ? 2 : 1),
+        border: Border(left: BorderSide(color: edge, width: podium != null || isMe ? 4 : 2)),
       ),
       child: Row(
         children: [
@@ -970,11 +1016,13 @@ class _RatingTile extends StatelessWidget {
                       Icon(Icons.emoji_events, color: podium, size: 34),
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
-                        child: Text('$rank', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.white)),
+                        child: Text('$rank', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.ink)),
                       ),
                     ],
                   )
-                : Text('$rank', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurfaceVariant)),
+                : Text('$rank',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontFamily: fontDisplay, fontSize: 22, height: 1.0, color: cs.onSurfaceVariant)),
           ),
           const SizedBox(width: 8),
           Avatar(name, size: podium != null ? 36 : 30),
@@ -1002,8 +1050,14 @@ class _RatingTile extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text('${row.points}', style: TextStyle(fontWeight: FontWeight.w900, fontSize: podium != null ? 20 : 16)),
-              Text('points', style: t.bodySmall),
+              Text('${row.points}',
+                  style: TextStyle(
+                    fontFamily: fontDisplay,
+                    fontSize: podium != null ? 30 : 24,
+                    height: 1.0,
+                    color: light ? AppColors.navy : cs.primary,
+                  )),
+              Text('POINTS', style: t.labelSmall?.copyWith(color: cs.onSurfaceVariant)),
             ],
           ),
         ],
@@ -1019,19 +1073,25 @@ class AwardIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Badge colours from the ACAPS palette.
     final (icon, color) = switch (badge) {
-      Award.superEstimator => (Icons.track_changes, const Color(0xFFD9A441)),
-      Award.usefulInsight => (Icons.lightbulb_outline, const Color(0xFF6E9E72)),
-      Award.cited => (Icons.push_pin_outlined, const Color(0xFF2E7DAF)),
-      Award.regular => (Icons.repeat, const Color(0xFF8A6FB0)),
+      Award.superEstimator => (Icons.track_changes, AppColors.gold),
+      Award.usefulInsight => (Icons.lightbulb_outline, AppColors.green),
+      Award.cited => (Icons.push_pin_outlined, AppColors.teal),
+      Award.regular => (Icons.repeat, informSeverity[2]),
+      Award.referralMaster => (Icons.group_add_outlined, AppColors.sand),
     };
     return Tooltip(
       message: badge.label,
       child: Container(
         width: size,
         height: size,
-        decoration: BoxDecoration(color: color.withAlpha(40), shape: BoxShape.circle),
-        child: Icon(icon, size: size * 0.6, color: color),
+        decoration: BoxDecoration(
+          color: color.withAlpha(50),
+          shape: BoxShape.circle,
+          border: Border.all(color: color, width: 1.5),
+        ),
+        child: Icon(icon, size: size * 0.58, color: readable(color)),
       ),
     );
   }

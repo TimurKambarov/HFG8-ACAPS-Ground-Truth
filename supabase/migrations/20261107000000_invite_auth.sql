@@ -35,8 +35,15 @@ alter table public.invite_codes add column if not exists role public.user_role n
 alter table public.invite_codes alter column panel_country drop not null;
 
 alter table public.invite_codes drop constraint if exists expert_code_has_panel;
-alter table public.invite_codes add constraint expert_code_has_panel
-  check (role <> 'expert' or panel_country is not null);
+-- Dropped for good by 20261107120000_referrals.sql (experts choose their country),
+-- so not added back when this file is re-run after it.
+do $$ begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'invite_codes' and column_name = 'kind') then
+    alter table public.invite_codes add constraint expert_code_has_panel
+      check (role <> 'expert' or panel_country is not null);
+  end if;
+end $$;
 
 insert into public.invite_codes (code, panel_country, role, max_uses) values
   ('GT-ACAPS-MOD1', null, 'moderator', 10)
@@ -44,7 +51,9 @@ on conflict (code) do nothing;
 
 -- Read-only check for the app (shows "Chad panel" / "ACAPS moderator" before the form).
 -- Does not count as a use: only a successful sign-up does.
-create or replace function public.check_invite(invite text)
+-- Dropped first: 20261107120000_referrals.sql adds a column to the result.
+drop function if exists public.check_invite(text);
+create function public.check_invite(invite text)
 returns table (role public.user_role, panel_country text)
 language sql stable security definer set search_path = '' as $$
   select c.role, c.panel_country

@@ -1,43 +1,60 @@
 # CLAUDE.md — Context for AI Coding Assistants
 
-This is the challenge repository for the **ACAPS Ground Truth** challenge at **Hackathon for Good #8** (6-8 November 2026, The Hague).
+This repository is team **Clankers**' **solution** to the **ACAPS Ground Truth** challenge at **Hackathon for Good #8** (6-8 November 2026, The Hague). It started as the challenge repository (docs, data, references) and now contains a working Flutter phone app and a Supabase backend built on top of it.
 
-## What This Repo Is
+## What We Built
 
-A hackathon challenge repository — not a software project. It contains:
-- Challenge documentation (the problem to solve)
-- A dataset (ACAPS Risk Radar export: 139 humanitarian risks across 57 countries)
-- Reference materials (methodology docs)
-- A starter notebook for data exploration
+**Ground Truth**: a phone app that gives ACAPS a small, trusted, moderated network of humanitarian experts per country. In about 2 minutes per risk an expert ground-truths an ACAPS risk trigger by trigger (agree / how bad / what is missing), gives one scored 6-month forecast on ACAPS's probability scale, and sees an anonymised Delphi-style group view. Forecasts are scored with the Brier score against real outcomes and against ACAPS's own ratings ("super estimators"). Experts choose their anonymity level; individual contributions are never public. ACAPS moderators review comments, manage invite-only panels (invite and referral codes) and export aggregated expert input.
 
-Participants fork this repo and build their solutions on top of it.
-
-## The Challenge
-
-Build a system for ACAPS to engage a trusted network of humanitarian experts to:
-1. **Ground truth** ACAPS risk analyses (Delphi-style expert validation)
-2. **Forecast** risk outcomes within a six-month horizon (with scoring and "super estimator" tracking)
-
-Key constraints: expert anonymity, minimal time commitment, retention over time, small trusted groups (5-10 per country).
+The root [README.md](README.md) maps every evaluation criterion to the code.
 
 ## Repo Structure
 
 ```
-docs/           → Challenge brief, methodology, data dictionary, evaluation criteria, resources
-data/           → Risk Radar export (CSV + XLSX), data README
+app/            → THE APP (Flutter: Android phones + web). Portrait, phone layouts only
+  lib/          → screens/, models.dart, store.dart (state), identity.dart (anonymity rules),
+                  auth.dart (Supabase accounts, invite/referral codes), risk_source.dart (reads the risks table)
+  test/         → anonymity rules, parser, moderator smoke test; fixtures/risks.json = snapshot of the risks table
+  tool/         → supabase_keys.dart (keys for flutter run), identity_check.dart
+  web/          → index.html + flutter_bootstrap.js: loading screen; phone frame on wide screens
+auth-lab/       → Test app for invite codes, sign-up and login (Supabase)
+supabase/       → Backend: SQL migrations (schema, row-level security, Brier views), setup guide
+scripts/        → sync_risks.dart: ACAPS Risk Radar API → Supabase (secret key); older CSV loader
+.github/        → deploy-demo.yml: builds app/ for web and publishes it on GitHub Pages
+docs/           → Challenge brief, methodology, data dictionary, evaluation criteria (from ACAPS)
+data/           → Risk Radar export (CSV + XLSX)
 references/     → ACAPS methodology PDF and infographic
 notebooks/      → Starter data exploration notebook
 ```
 
+## Run
+
+```powershell
+./app/run.ps1 -Device <device-id>   # passes SUPABASE_URL + SUPABASE_PUBLISHABLE_KEY from API.key
+cd app; flutter test                # never calls Supabase
+```
+
+In VS Code: *Run and Debug* → **app (phone)** or **app (Edge, dev only)**. Details: [app/README.md](app/README.md), [supabase/README.md](supabase/README.md).
+
+## Key Rules in the Code
+
+- The app is mobile-only: design every screen for a phone in portrait. On the web, wide screens get a phone frame (`app/web/index.html`), so the layout never needs a desktop version.
+- The app only **reads** risks from Supabase and never calls the ACAPS API; `scripts/sync_risks.dart` writes them. The app holds only the publishable key, never the secret key.
+- Every name shown anywhere comes from `displayName(expert, viewer)` in `app/lib/identity.dart`. Level 3 (fully anonymous) deletes the real name.
+- No group results below `minPanel` (3) respondents (`app/lib/store.dart`). The export for ACAPS contains aggregates only.
+- Accounts, codes, referrals and risks are in Supabase; answers, comments and points still run on synthetic demo data on the device (`shared_preferences`).
+- All experts and their answers are synthetic. Risks, ACAPS ratings and outcomes are real (ACAPS Risk Radar).
+
 ## Data
 
-- `data/risk-radar-export.csv` — clean CSV, 139 rows, 25 columns
+- The app uses the live Risk Radar (Supabase `risks` table, synced from the ACAPS API). Demo risk: **R1055** (returns from eastern Chad to West Darfur); R1043 is no longer in the API
+- `data/risk-radar-export.csv` — the original export: 139 risks, 57 countries, 25 columns
 - Key fields: Risk ID, Risk Title, Country, Probability, Impact, Risk Level, Status
-- Demo risk: **R1043** (Chad/Sudan cross-border insecurity)
-- Text fields may contain multi-line content; triggers field has structured `Trigger ID: / Title: / Description:` format
+- Triggers field has a structured `Trigger ID: / Title: / Description:` format
 
 ## Important Notes
 
-- Do not use personal data of real experts — use synthetic users
+- Do not use personal data of real experts — synthetic users only
+- Secrets (`API.key`, `*.key`, `.env`) are git-ignored; never commit keys
 - The data is a working export with some quality issues (see `docs/data-dictionary.md`)
 - ACAPS data is used under ACAPS' terms of use

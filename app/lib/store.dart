@@ -2,17 +2,20 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'csv.dart';
+import 'auth.dart';
 import 'identity.dart';
 import 'models.dart';
+import 'risk_source.dart';
 
 export 'identity.dart';
 
 /// A new random invite code, e.g. "GT-7Q4X-K9MB" (no 0/O/1/I to misread).
-/// Referral links use the prefix "REF".
+/// Referral codes use the prefix "REF". Demo mode only: with real accounts
+/// the server makes the codes (same format, see the referrals migration).
+/// There is no installed app yet, so people share codes, not links: the
+/// new member types the code on the start screen.
 String newInviteCode([Random? rnd, String prefix = 'GT']) {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   final r = rnd ?? Random.secure();
@@ -20,14 +23,8 @@ String newInviteCode([Random? rnd, String prefix = 'GT']) {
   return '$prefix-${part()}-${part()}';
 }
 
-/// The link a token opens: this app with ?invite=<token>. Used for the
-/// moderators' single-use invites and the experts' permanent referral links.
-/// Opening it is the authorisation to create a profile.
-String inviteLink(String code) {
-  final b = Uri.base;
-  return Uri(scheme: b.scheme, host: b.host, port: b.hasPort ? b.port : null, path: b.path, queryParameters: {'invite': code})
-      .toString();
-}
+/// A real (Supabase) account id, as opposed to a local demo id like "p1".
+bool isAccountId(String id) => id.length == 36 && id.split('-').length == 5;
 
 /// Brier score of a forecast on the ACAPS scale (1..5): squared gap between
 /// its probability (the middle of the ACAPS range) and what happened.
@@ -39,8 +36,8 @@ class Points {
   static const usefulComment = 25;
   static const usedComment = 50;
 
-  /// A colleague joined through your referral link. Demo: as soon as they
-  /// register. Pilot: once they have answered [referralAnswersInPilot] risks.
+  /// A colleague signed up with your referral code (counted at sign-up).
+  /// [referralAnswersInPilot] is the goal of the progress stages.
   static const referral = 100;
   static const referralAnswersInPilot = 3;
   static int forecast(double brier) => (100 * (1 - brier)).round();
@@ -90,7 +87,11 @@ const moderators = [
   Moderator(id: 'm3', name: 'Mei Tanaka'),
 ];
 
-Moderator? moderatorById(String? id) => moderators.where((m) => m.id == id).firstOrNull;
+/// Real moderator accounts seen on this device (Supabase user id -> name).
+final Map<String, Moderator> accountModerators = {};
+
+Moderator? moderatorById(String? id) =>
+    moderators.where((m) => m.id == id).firstOrNull ?? (id == null ? null : accountModerators[id]);
 
 enum AppTheme { system, light, dark, contrast }
 
@@ -113,7 +114,11 @@ double snapTextScale(double v) =>
 const minPanel = 3;
 const minResolvedForBrier = 3;
 
-enum Award { superEstimator, usefulInsight, cited, regular }
+enum Award { superEstimator, usefulInsight, cited, regular, referralMaster }
+
+/// Colleagues who must have joined with your referral code for the
+/// Referral Master badge.
+const referralMasterMin = 3;
 
 extension AwardText on Award {
   String get label => switch (this) {
@@ -121,6 +126,7 @@ extension AwardText on Award {
         Award.usefulInsight => 'Useful insight',
         Award.cited => 'Cited in analysis',
         Award.regular => 'Regular',
+        Award.referralMaster => 'Referral Master',
       };
 
   String get why => switch (this) {
@@ -128,6 +134,30 @@ extension AwardText on Award {
         Award.usefulInsight => 'A moderator marked your comment as useful',
         Award.cited => 'Your comment was used in the analysis of another risk',
         Award.regular => 'Answered 5 or more risk surveys',
+        Award.referralMaster => 'Invited $referralMasterMin or more experts who joined the community with your referral code',
+      };
+}
+
+/// The second trust signal, next to how an expert joined: what they do in
+/// the app. Moderators only. In the demo it comes from the simulated history.
+enum Activity { newcomer, active, established }
+
+/// Risks answered to count as active, and accuracy (with at least
+/// [minResolvedForBrier] matured forecasts) that counts as a quality record.
+const activeMinAnswers = 3, establishedMinAccuracy = 70;
+
+extension ActivityText on Activity {
+  String get label => switch (this) {
+        Activity.newcomer => 'New',
+        Activity.active => 'Active',
+        Activity.established => 'Established',
+      };
+
+  String get why => switch (this) {
+        Activity.newcomer => 'Fewer than $activeMinAnswers risks answered so far',
+        Activity.active => '$activeMinAnswers or more risks answered',
+        Activity.established => '$activeMinAnswers+ risks answered, and a comment marked useful or used in analysis, '
+            'or accuracy of $establishedMinAccuracy%+ over $minResolvedForBrier+ matured forecasts',
       };
 }
 
@@ -203,7 +233,22 @@ class ForecastScore {
 }
 
 class AppState extends ChangeNotifier {
+  /// ACAPS's risks, from the Supabase `risks` table (kept equal to the live
+  /// Risk Radar API by scripts/sync_risks.dart), or the last copy saved on
+  /// this device when Supabase cannot be reached.
   List<Risk> risks = [];
+
+  /// When the sync last changed the risks in Supabase (latest imported_at).
+  DateTime? risksSyncedAt;
+
+  /// The risks shown are the copy saved on this device, because Supabase
+  /// could not be reached; [risksProblem] says why.
+  bool risksFromCache = false;
+  String? risksProblem;
+
+  /// A refresh of the risks is running (for the Refresh buttons).
+  bool refreshingRisks = false;
+
   bool loaded = false;
   String? error;
   SharedPreferences? _prefs;
@@ -232,7 +277,7 @@ class AppState extends ChangeNotifier {
   /// Sets the theme for the current account without saving (tests, previews).
   set theme(AppTheme t) => _display[_displayKey] = (theme: t, scale: textScale);
 
-  /// Risk to open straight away, e.g. from a tapped push notification (?risk=R1043).
+  /// Risk to open straight away, e.g. from a tapped push notification (?risk=R1055).
   String? deepLinkRisk;
 
   /// Risks already auto-opened this launch ("expertId|riskId"), so the pop-up shows once.
@@ -297,33 +342,40 @@ class AppState extends ChangeNotifier {
   }
 
   // ---- session (persisted) ----
-  /// Country suggested by the invite link that was opened (may be null).
+  /// Country suggested by the code that was entered (may be null).
   String? invitePanel;
 
-  /// The single-use invite this person opened; used up when they register.
+  /// Demo mode: the local code this person entered; a single-use invite is
+  /// used up when they register.
   String? pendingInviteCode;
 
-  /// Why the last invite link did not work (shown on the sign-in screen).
-  InviteStatus? inviteError;
+  /// Real accounts: the code the server accepted, until the sign-up is done.
+  CodeCheck? pendingCode;
 
-  /// "Log in" pressed on the start screen: existing members sign in without
-  /// an invite link. Not persisted.
+  /// "Log in" pressed on the start screen (demo mode: the list of demo
+  /// users). Not persisted.
   bool showLogin = false;
 
-  /// A valid, unused invite link was opened: go straight to the profile form.
+  /// A valid code was entered: go to the sign-up form.
   bool get canRegister {
+    if (pendingCode != null) return true;
     final code = pendingInviteCode;
     if (code == null) return false;
     final i = inviteByCode(code);
     return (i != null && i.open) || referrerByCode(code) != null;
   }
 
-  /// The expert whose referral link was opened, if the pending link is one.
+  /// Demo mode: the expert whose referral code was entered, if it is one.
   Expert? get pendingReferrer => pendingInviteCode == null ? null : referrerByCode(pendingInviteCode!);
 
-  /// The log-in screen: after "Log in", or when an opened link did not work
-  /// (it says why). The start screen shows "Register" and "Log in".
-  bool get atSignIn => showLogin || inviteError != null;
+  /// The code entered is a colleague's referral code (not an ACAPS invite).
+  bool get pendingIsReferral => pendingCode?.isReferral ?? pendingReferrer != null;
+
+  /// The code entered makes an ACAPS moderator account.
+  bool get pendingIsModerator => pendingCode?.isModerator ?? false;
+
+  /// Demo mode: the list of demo users to log in as.
+  bool get atSignIn => showLogin;
 
   void openLogin() {
     showLogin = true;
@@ -335,9 +387,10 @@ class AppState extends ChangeNotifier {
     showLogin = false;
     invitePanel = null;
     pendingInviteCode = null;
-    inviteError = null;
+    pendingCode = null;
     _changed();
   }
+
   String? sessionExpertId;
   String? sessionModeratorId;
 
@@ -346,30 +399,81 @@ class AppState extends ChangeNotifier {
   /// The moderator signed in, if any.
   Moderator? get moderator => moderatorById(sessionModeratorId);
 
+  /// At launch (and from the Retry button when nothing could be loaded).
   Future<void> load() async {
+    loaded = false;
+    error = null;
     try {
-      final raw = await rootBundle.loadString('assets/risk-radar-export.csv');
-      final rows = parseCsv(raw);
-      final header = rows.first.map((h) => h.trim()).toList();
-      risks = rows.skip(1).where((r) => r.length > 1 && r[0].trim().isNotEmpty).map((r) {
-        final m = <String, String>{};
-        for (var i = 0; i < header.length; i++) {
-          m[header[i]] = i < r.length ? r[i] : '';
-        }
-        return Risk.fromRow(m);
-      }).toList();
-
       try {
         _prefs = await SharedPreferences.getInstance();
       } catch (_) {
         // Storage is optional: the app still works, it just won't remember.
       }
       _restoreUi();
+      // Risks first: restoring answers and seeding the demo look them up.
+      await _loadRisks();
+      if (risks.isEmpty) {
+        throw StateError('No risks to show yet. ${risksProblem ?? ''}'.trim());
+      }
       if (!_restore()) _seed();
+      checkAccountSession();
     } catch (e) {
-      error = '$e';
+      error = e is StateError ? e.message : '$e';
     }
     loaded = true;
+    notifyListeners();
+  }
+
+  // =========================================================================
+  // Risks: Supabase (synced from the ACAPS API), else the copy on this device
+  // =========================================================================
+
+  static const _risksKey = 'ground_truth_risks_v1';
+
+  /// Loads the risks from Supabase and keeps a copy on the device. When
+  /// Supabase cannot be reached, uses that copy instead. Never throws.
+  Future<void> _loadRisks() async {
+    try {
+      final snap = await riskSource.fetch();
+      if (snap.risks.isEmpty) throw StateError('The risks table in Supabase is empty. Run scripts/sync_risks.dart.');
+      risks = snap.risks;
+      risksSyncedAt = snap.syncedAt;
+      risksFromCache = false;
+      risksProblem = null;
+      _prefs?.setString(
+        _risksKey,
+        jsonEncode({
+          'synced_at': snap.syncedAt?.toUtc().toIso8601String(),
+          'risks': [for (final r in snap.risks) r.toJson()],
+        }),
+      );
+    } catch (e) {
+      risksProblem = explain(e);
+      try {
+        final raw = _prefs?.getString(_risksKey);
+        if (raw == null) return;
+        final m = jsonDecode(raw) as Map<String, dynamic>;
+        risks = [for (final r in m['risks'] as List) Risk.fromJson((r as Map).cast<String, dynamic>())];
+        risksSyncedAt = DateTime.tryParse('${m['synced_at']}')?.toLocal();
+        risksFromCache = true;
+      } catch (_) {
+        // Unreadable copy: nothing to show; load() reports the problem.
+      }
+    }
+  }
+
+  /// Reloads the risks from Supabase while the app runs (Refresh buttons).
+  /// Answers and comments stay: they are keyed by risk id. A risk the API
+  /// closed moves to the Archive and the forecasts given on it get scored.
+  Future<void> refreshRisks() async {
+    if (refreshingRisks) return;
+    refreshingRisks = true;
+    notifyListeners();
+    final before = risks;
+    await _loadRisks();
+    if (risks.isEmpty) risks = before;
+    refreshingRisks = false;
+    _statsCache.clear();
     notifyListeners();
   }
 
@@ -383,33 +487,41 @@ class AppState extends ChangeNotifier {
 
   bool get signedIn => sessionModerator || me != null;
 
-  // ---- single-use invites (persisted) ----
+  // ---- codes: one entry point for both modes ----
+
+  /// "I have a code" on the start screen. With real accounts the server
+  /// checks it; in demo mode the local codes. A valid code opens the sign-up
+  /// form. Checking does not use a code up: only joining does.
+  Future<InviteStatus> enterCode(String typed) async {
+    if (!Auth.ready) return redeemInvite(typed);
+    final r = await Auth.checkCode(typed);
+    if (r.code != null) {
+      pendingCode = r.code;
+      invitePanel = r.code!.panel;
+      pendingInviteCode = null;
+      showLogin = false;
+      _changed();
+    }
+    return r.status;
+  }
+
+  // ---- single-use invites (persisted; demo mode) ----
   List<Invite> invites = [];
 
   Invite? inviteByCode(String code) {
-    final c = code.trim().toUpperCase();
+    final c = cleanCode(code);
     return invites.where((i) => i.code == c).firstOrNull;
   }
 
-  /// The invite token in a link (".../?invite=GT-7Q4X-K9MB"), or the text
-  /// itself when it is just the token.
-  static String inviteToken(String linkOrCode) {
-    final s = linkOrCode.trim();
-    final fromLink = RegExp(r'[?&]invite=([^&#\s]+)').firstMatch(s)?.group(1);
-    return Uri.decodeComponent(fromLink ?? s);
-  }
-
-  /// Opens an invite link (the app starts with ?invite=<token>). The link is
-  /// the authorisation: each works once, and is used up when the person
-  /// creates their profile. There is no field to paste links into: new
-  /// members only get in by opening the link they were sent.
-  InviteStatus redeemInvite(String linkOrCode) {
-    final token = inviteToken(linkOrCode);
-    // An expert's referral link: permanent, works for any number of colleagues.
+  /// Demo mode: checks a typed code against the local codes. A moderator's
+  /// invite works once and is used up when the person registers; an expert's
+  /// referral code works for any number of colleagues.
+  InviteStatus redeemInvite(String typed) {
+    final token = cleanCode(typed);
     if (referrerByCode(token) case final ref?) {
-      inviteError = null;
       invitePanel = null;
       pendingInviteCode = ref.referralCode;
+      showLogin = false;
       _changed();
       return InviteStatus.ok;
     }
@@ -421,31 +533,47 @@ class AppState extends ChangeNotifier {
             : i.used
                 ? InviteStatus.used
                 : InviteStatus.ok;
-    inviteError = status == InviteStatus.ok ? null : status;
     if (status == InviteStatus.ok) {
       invitePanel = i!.country;
       pendingInviteCode = i.code;
+      showLogin = false;
+      _changed();
     }
-    _changed();
     return status;
   }
 
-  // ---- referral links (persisted) ----
-  /// Who joined through whose referral link (never which account joined).
+  // ---- referral codes ----
+  /// Demo mode: who joined with whose referral code (persisted).
   List<Referral> referrals = [];
 
+  /// Real accounts: when colleagues joined with my code (from the server).
+  List<DateTime>? _accountReferrals;
+
+  /// Real accounts, moderators: colleagues joined per expert account.
+  Map<String, int> _remoteReferralCounts = {};
+
   Expert? referrerByCode(String code) {
-    final c = code.trim().toUpperCase();
+    final c = cleanCode(code);
     if (c.isEmpty) return null;
     return experts.where((e) => e.referralCode == c).firstOrNull;
   }
 
-  /// Colleagues who joined through [e]'s referral link.
-  int referralsBy(Expert e) => referrals.where((r) => r.referrerId == e.id).length;
+  /// Colleagues who joined with [e]'s referral code.
+  int referralsBy(Expert e) {
+    if (e.id == sessionAccountId && _accountReferrals != null) return _accountReferrals!.length;
+    return _remoteReferralCounts[e.id] ?? referrals.where((r) => r.referrerId == e.id).length;
+  }
 
-  /// Progress of each colleague who joined through [e]'s link, oldest first:
-  /// only the number of risks answered and the stage, nothing else.
-  List<({int answered, ReferralStage stage})> referralProgress(Expert e) {
+  /// Progress of each colleague who joined with [e]'s code, oldest first:
+  /// only the number of risks answered and the stage, nothing else. For real
+  /// accounts the server only says when they joined ([tracked] false):
+  /// answers are not in the shared database yet.
+  List<({int answered, ReferralStage stage, DateTime joinedAt, bool tracked})> referralProgress(Expert e) {
+    if (e.id == sessionAccountId && _accountReferrals != null) {
+      return [
+        for (final d in _accountReferrals!) (answered: 0, stage: ReferralStage.joined, joinedAt: d, tracked: false),
+      ];
+    }
     final mine = referrals.where((r) => r.referrerId == e.id).toList()..sort((a, b) => a.joinedAt.compareTo(b.joinedAt));
     return [
       for (final r in mine)
@@ -459,17 +587,20 @@ class AppState extends ChangeNotifier {
                 : n >= 1
                     ? ReferralStage.firstRisk
                     : ReferralStage.joined,
+            joinedAt: r.joinedAt,
+            tracked: true,
           );
         }(),
     ];
   }
 
-  /// Every expert gets a permanent referral link. Called when experts are
-  /// created or loaded, never while a screen is being built.
+  /// Every demo expert gets a permanent referral code. Called when experts
+  /// are created or loaded, never while a screen is being built. Real
+  /// accounts get theirs from the server instead.
   /// Returns whether any code was new (then it must be saved: a referral
-  /// link is permanent and must never change).
+  /// code is permanent and must never change).
   bool _ensureReferralCodes([Random? rnd]) {
-    final missing = experts.where((e) => e.referralCode.isEmpty).toList();
+    final missing = experts.where((e) => e.referralCode.isEmpty && !isAccountId(e.id)).toList();
     for (final e in missing) {
       String code;
       do {
@@ -480,22 +611,8 @@ class AppState extends ChangeNotifier {
     return missing.isNotEmpty;
   }
 
-  /// The invite link this device last opened (persisted), so reloading the
-  /// same link does not sign the new member out again.
-  String? lastOpenedInvite;
-
-  /// The app was opened with an invite link: whoever was signed in on this
-  /// device is signed out (a new person is joining), then the link is checked.
-  InviteStatus openInviteLink(String linkOrCode) {
-    lastOpenedInvite = linkOrCode;
-    sessionExpertId = null;
-    sessionModeratorId = null;
-    showLogin = false;
-    return redeemInvite(linkOrCode);
-  }
-
-  /// A moderator creates a new single-use link for one person. No country:
-  /// the new expert chooses theirs when creating their profile.
+  /// Demo mode: a moderator creates a new single-use code for one person.
+  /// No country: the new expert chooses theirs when creating their profile.
   Invite createInvite({String note = '', String? country}) {
     String code;
     do {
@@ -513,7 +630,7 @@ class AppState extends ChangeNotifier {
     return i;
   }
 
-  /// "Who is it for", moderators only.
+  /// "Who is it for", moderators only (demo mode).
   void setInviteNote(Invite i, String note) {
     i.note = note.trim();
     _changed();
@@ -524,33 +641,173 @@ class AppState extends ChangeNotifier {
     _changed();
   }
 
-  /// All invite links, newest first.
-  List<Invite> get invitesNewestFirst => [...invites]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  // ---- invite codes: one entry point for both modes (moderators) ----
+
+  /// The signed-in moderator uses the server's codes (a real account).
+  bool get _serverInvites => sessionModerator && sessionAccountId != null && Auth.ready;
+
+  /// Real accounts: the server's invite codes, newest first (null until loaded).
+  List<Invite>? remoteInvites;
+
+  /// A new single-use code: on the server for a real moderator account,
+  /// otherwise local. Throws when the server refuses; see [explain].
+  Future<Invite> newInvite({String note = ''}) async {
+    if (!_serverInvites) return createInvite(note: note);
+    final code = await Auth.createInvite(note: note);
+    await _reloadInvites();
+    return remoteInvites?.where((i) => i.code == code).firstOrNull ??
+        Invite(code: code, createdBy: sessionAccountId!, createdByName: moderator?.name, createdAt: DateTime.now(), note: note);
+  }
+
+  Future<void> saveInviteNote(Invite i, String note) async {
+    if (!_serverInvites) return setInviteNote(i, note);
+    i.note = note.trim();
+    await Auth.setInviteNote(i.code, note);
+  }
+
+  Future<void> cancelInvite(Invite i) async {
+    if (!_serverInvites) return revokeInvite(i);
+    await Auth.revokeInvite(i.code);
+    i.revoked = true;
+    await _reloadInvites();
+  }
+
+  Future<void> _reloadInvites() async {
+    remoteInvites = await Auth.listInvites();
+    notifyListeners();
+  }
+
+  /// All invite codes, newest first.
+  List<Invite> get invitesNewestFirst =>
+      _serverInvites ? [...?remoteInvites] : ([...invites]..sort((a, b) => b.createdAt.compareTo(a.createdAt)));
 
   /// For the demo "Register" button: an open invite, Chad first.
   Invite? get demoInvite =>
       invites.where((i) => i.open && i.country == 'Chad').firstOrNull ?? invites.where((i) => i.open).firstOrNull;
 
+  // ---- signing in ----
+
   void signInAs(Expert e) {
     sessionExpertId = e.id;
     sessionModeratorId = null;
+    sessionAccountId = null;
     _changed();
   }
 
   void signInModerator([String id = 'm1']) {
     sessionExpertId = null;
     sessionModeratorId = moderatorById(id)?.id ?? moderators.first.id;
+    sessionAccountId = null;
     _changed();
   }
 
-  /// "Switch user": back to the log-in screen.
-  void signOut() {
+  /// Supabase user id when signed in with a real account, null for demo users.
+  String? sessionAccountId;
+
+  /// Why the last refresh from the server failed (null when it worked).
+  String? accountSyncError;
+
+  /// After a real login or sign-up (see auth.dart). An expert gets a local
+  /// record keyed by their Supabase user id, created from their profile row
+  /// the first time; answers and points stay local. Then the referral code,
+  /// referrals and (moderators) invite codes are loaded from the server.
+  void signInAccount(AccountProfile p) {
+    if (p.isModerator) {
+      accountModerators[p.userId] = Moderator(id: p.userId, name: p.realName ?? 'ACAPS moderator');
+      sessionExpertId = null;
+      sessionModeratorId = p.userId;
+    } else {
+      if (expertById(p.userId) == null) {
+        final home = p.homeCountry ?? invitePanel ?? 'Chad';
+        experts.add(Expert(
+          id: p.userId,
+          joinedVia: p.joinedVia,
+          realName: p.realName,
+          pseudonym: p.pseudonym,
+          level: p.level,
+          homeCountry: home,
+          interests: {...p.interests}..remove(home),
+          onRating: p.onRating,
+          notifications: p.notifications,
+          hideFromOtherCountries: p.hideFromOtherCountries,
+        ));
+      }
+      sessionExpertId = p.userId;
+      sessionModeratorId = null;
+    }
+    sessionAccountId = p.userId;
+    pendingCode = null;
+    pendingInviteCode = null;
+    invitePanel = null;
+    showLogin = false;
+    _accountReferrals = null;
+    _remoteReferralCounts = {};
+    remoteInvites = null;
+    _changed();
+    refreshAccount();
+  }
+
+  /// Loads what lives on the server for the signed-in account. Never throws:
+  /// the reason is kept in [accountSyncError].
+  Future<void> refreshAccount() async {
+    final id = sessionAccountId;
+    if (id == null || !Auth.ready) return;
+    try {
+      if (sessionModerator) {
+        final invites = await Auth.listInvites();
+        final counts = await Auth.referralCounts();
+        if (sessionAccountId != id) return; // signed out meanwhile
+        remoteInvites = invites;
+        _remoteReferralCounts = counts;
+      } else {
+        final code = await Auth.myReferralCode();
+        final joined = await Auth.myReferrals();
+        if (sessionAccountId != id) return;
+        final e = expertById(id);
+        if (e != null && code != null) e.referralCode = code;
+        _accountReferrals = joined;
+      }
+      accountSyncError = null;
+    } catch (e) {
+      if (sessionAccountId != id) return;
+      accountSyncError = explain(e);
+    }
+    _changed();
+  }
+
+  /// At launch: drop a saved account session that Supabase no longer has
+  /// (logged out, expired, or a build without the Supabase keys). With real
+  /// accounts available, a leftover demo session is closed too: everyone
+  /// logs in with a password then.
+  void checkAccountSession() {
+    if (sessionAccountId != null && sessionAccountId != Auth.currentUserId) {
+      _clearSession();
+    } else if (Auth.ready && sessionAccountId == null && signedIn) {
+      _clearSession();
+    }
+  }
+
+  void _clearSession() {
     sessionExpertId = null;
     sessionModeratorId = null;
-    showLogin = true;
-    _changed();
+    sessionAccountId = null;
+    _accountReferrals = null;
+    _remoteReferralCounts = {};
+    remoteInvites = null;
+    accountSyncError = null;
   }
 
+  /// "Log out" / "Switch user". Demo mode: back to the list of demo users.
+  /// Real accounts: ends the session and goes back to the start screen.
+  void signOut() {
+    final hadAccount = sessionAccountId != null;
+    _clearSession();
+    showLogin = !Auth.ready;
+    _changed();
+    if (hadAccount) Auth.signOut();
+  }
+
+  /// Demo mode: registers locally with the code entered on the start screen.
   Expert register({
     required Anonymity level,
     required String? realName,
@@ -561,16 +818,23 @@ class AppState extends ChangeNotifier {
     required bool onRating,
     bool hideFromOtherCountries = false,
   }) {
-    // The link is the authorisation: no profile without a valid, unused
-    // moderator invite or a colleague's referral link (a real backend checks
-    // this on the server too).
+    // The code is the authorisation: no profile without a valid, unused
+    // moderator invite or a colleague's referral code (with real accounts
+    // the server checks this, see registerAccount).
     final invite = pendingInviteCode == null ? null : inviteByCode(pendingInviteCode!);
     final referrer = pendingReferrer;
     if ((invite == null || !invite.open) && referrer == null) {
-      throw StateError('A new profile needs a valid invite or referral link.');
+      throw StateError('A new profile needs a valid invite or referral code.');
+    }
+    // A unique id, even for two registrations in the same instant.
+    var id = 'u${DateTime.now().microsecondsSinceEpoch}';
+    while (expertById(id) != null) {
+      id = '${id}x';
     }
     final e = Expert(
-      id: 'u${DateTime.now().millisecondsSinceEpoch}',
+      id: id,
+      // The door check, for moderators: how this person got in.
+      joinedVia: referrer != null && (invite == null || !invite.open) ? JoinedVia.expertReferral : JoinedVia.acapsInvite,
       realName: level.needsRealName ? realName?.trim() : null,
       pseudonym: pseudonym.trim(),
       level: level,
@@ -581,20 +845,57 @@ class AppState extends ChangeNotifier {
       hideFromOtherCountries: hideFromOtherCountries,
     );
     experts.add(e);
-    _ensureReferralCodes(); // the new member gets their own referral link
+    _ensureReferralCodes(); // the new member gets their own referral code
     if (invite != null && invite.open) {
       // A moderator's invite is now used up. It records only WHEN, never
       // which account, so a fully anonymous expert cannot be traced through it.
       invite.usedAt = DateTime.now();
     } else if (referrer != null) {
-      // A colleague's referral link stays valid. The inviter earns
-      // Points.referral (demo: on registration) and can follow the new
-      // member's progress (stage only; they were told when joining).
+      // A colleague's referral code stays valid. The inviter earns
+      // Points.referral on sign-up and can follow the new member's progress
+      // (stage only; they were told when joining).
       referrals.add(Referral(referrer.id, DateTime.now(), e.id));
     }
     pendingInviteCode = null;
     signInAs(e);
     return e;
+  }
+
+  /// Real accounts: creates the expert account on the server with the code
+  /// the server accepted, then signs in. Throws on failure; see [explain].
+  Future<void> registerAccount({
+    required String password,
+    required Anonymity level,
+    required String? realName,
+    required String pseudonym,
+    required String homeCountry,
+    required Set<String> interests,
+    required bool notifications,
+    required bool onRating,
+    bool hideFromOtherCountries = false,
+  }) async {
+    final code = pendingCode;
+    if (code == null) throw StateError('Enter your invite or referral code first.');
+    final p = await Auth.signUpExpert(
+      code: code,
+      pseudonym: pseudonym,
+      password: password,
+      level: level,
+      realName: level.needsRealName ? realName : null,
+      homeCountry: homeCountry,
+      interests: interests,
+      notifications: notifications,
+      onRating: onRating,
+      hideFromOtherCountries: hideFromOtherCountries,
+    );
+    signInAccount(p);
+  }
+
+  /// Real accounts: creates a moderator account with a moderator code.
+  Future<void> registerModerator({required String realName, required String email, required String password}) async {
+    final code = pendingCode;
+    if (code == null || !code.isModerator) throw StateError('Enter a moderator code first.');
+    signInAccount(await Auth.signUpModerator(code: code, realName: realName, email: email, password: password));
   }
 
   void updateMe(void Function(Expert e) f) {
@@ -607,15 +908,16 @@ class AppState extends ChangeNotifier {
 
   Future<void> resetDemo() async {
     await _prefs?.remove(_prefsKey);
+    final hadAccount = sessionAccountId != null;
     invitePanel = null;
     pendingInviteCode = null;
-    inviteError = null;
+    pendingCode = null;
     showLogin = false;
-    sessionExpertId = null;
-    sessionModeratorId = null;
+    _clearSession();
+    if (hadAccount) Auth.signOut();
     _bannerDismissed.clear();
     autoOpened.clear(); // a reset demo shows the entry pop-up again
-    risks.removeWhere((r) => r.custom);
+    // The risks stay: they are ACAPS's, not demo data.
     _seed();
     _statsCache.clear();
     notifyListeners();
@@ -655,7 +957,7 @@ class AppState extends ChangeNotifier {
     final e = me;
     if (e == null) return [];
     int score(Risk r) =>
-        (r.id == 'R1043' ? 1000 : 0) + (r.inCountry(e.homeCountry) ? 100 : 0) + (r.level == 'High' ? 10 : 0);
+        (r.id == demoRiskId ? 1000 : 0) +(r.inCountry(e.homeCountry) ? 100 : 0) + (r.level == 'High' ? 10 : 0);
     return risks.where((r) => r.isActive && r.probabilityIdx != null && relevantTo(e, r)).toList()
       ..sort((a, b) => score(b).compareTo(score(a)));
   }
@@ -801,12 +1103,11 @@ class AppState extends ChangeNotifier {
   /// answers on active risks, so whoever demos them can take the survey.
   Response? _simulated(Expert e, Risk r) {
     if (!e.simulated || !relevantTo(e, r)) return null;
-    if (r.custom) return null; // a brand-new risk has no answers yet
-    // 7 risks in the export have no status: neither open nor closed, so
+    // 7 risks in the Risk Radar have no status: neither open nor closed, so
     // nobody could answer them (and they would "wait" forever).
     if (!r.isActive && !r.isResolved) return null;
     if (e.persona && r.isActive) return null;
-    if (r.id != 'R1043' && Random(stableHash('${e.id}|${r.id}')).nextDouble() > e.participation) return null;
+    if (r.id != demoRiskId &&Random(stableHash('${e.id}|${r.id}')).nextDouble() > e.participation) return null;
 
     final base = r.acapsLikelihood ?? 3;
 
@@ -858,9 +1159,10 @@ class AppState extends ChangeNotifier {
   /// Demo storylines (synthetic, fixed so the demo tells a clear story):
   /// each expert's forecast a month ago and now, on the 1-5 ACAPS scale.
   static const _demoStories = <String, Map<String, ({int then, int now})>>{
-    // R1043: the panel moved from Medium to High after ACAPS's 30 Sep 2026
-    // update ("from a snapshot to a live picture").
-    'R1043': {
+    // The demo risk (R1055, returns from eastern Chad to West Darfur): the
+    // panel moved from Medium to High over the last month ("from a snapshot
+    // to a live picture").
+    demoRiskId: {
       'e4': (then: 3, now: 4),
       'e5': (then: 3, now: 4),
       'e6': (then: 4, now: 4),
@@ -925,6 +1227,7 @@ class AppState extends ChangeNotifier {
       if (cs.any((c) => c.useful)) Award.usefulInsight,
       if (cs.any((c) => c.usedInRiskId != null)) Award.cited,
       if (responsesOf(e).length >= 5) Award.regular,
+      if (referralsBy(e) >= referralMasterMin) Award.referralMaster,
     };
   }
 
@@ -934,6 +1237,15 @@ class AppState extends ChangeNotifier {
     final xs = _brierRanked();
     final i = xs.indexWhere((x) => x.id == e.id);
     return i < 0 ? null : (rank: i + 1, of: xs.length);
+  }
+
+  /// What an expert does in the app, as a trust signal for moderators.
+  Activity expertActivity(Expert e) {
+    if (responsesOf(e).length < activeMinAnswers) return Activity.newcomer;
+    final st = statsOf(e);
+    final usefulComment = commentsBy(e).any((c) => c.useful || c.usedInRiskId != null);
+    final accurate = st.brier != null && st.resolved >= minResolvedForBrier && accuracyPct(st.brier!) >= establishedMinAccuracy;
+    return usefulComment || accurate ? Activity.established : Activity.active;
   }
 
   List<Expert> _brierRanked() {
@@ -1075,39 +1387,6 @@ class AppState extends ChangeNotifier {
   }
 
   // =========================================================================
-  // Risks created by the moderator
-  // =========================================================================
-
-  /// Next free id after the highest "R<number>" in use.
-  String nextRiskId() {
-    final n = risks.map((r) => int.tryParse(r.id.replaceAll(RegExp('[^0-9]'), '')) ?? 0).fold(0, max);
-    return 'R${n + 1}';
-  }
-
-  /// Adds a new risk, or replaces the one with the same id.
-  void saveRisk(Risk r) {
-    final i = risks.indexWhere((x) => x.id == r.id);
-    if (i >= 0) {
-      risks[i] = r;
-    } else {
-      risks.add(r);
-    }
-    _changed();
-  }
-
-  /// Only risks created in the app can be deleted; Risk Radar risks stay.
-  void deleteRisk(Risk r) {
-    if (!r.custom) return;
-    risks.removeWhere((x) => x.id == r.id);
-    comments.removeWhere((c) => c.riskId == r.id);
-    _responses.removeWhere((_, v) => v.riskId == r.id);
-    for (final s in _skipped.values) {
-      s.remove(r.id);
-    }
-    _changed();
-  }
-
-  // =========================================================================
   // Public view: aggregates only, safe to publish
   // =========================================================================
 
@@ -1160,6 +1439,8 @@ class AppState extends ChangeNotifier {
       'Impact': r.impact,
       'Risk Level': r.level.isEmpty ? null : r.level,
       'Risk trend': r.trend.isEmpty ? null : r.trend,
+      'Expected exposure': r.exposure.isEmpty ? null : r.exposure,
+      'Expected priority needs': r.needs.isEmpty ? null : r.needs,
       'Status': r.status,
       // What this tool adds.
       'expert_input': {
@@ -1226,7 +1507,7 @@ class AppState extends ChangeNotifier {
   String publicViewJson(Iterable<Risk> rs, {bool credits = false}) => const JsonEncoder.withIndent('  ').convert({
         'schema': 'acaps-ground-truth/expert-input/v3',
         'generated_at': DateTime.now().toUtc().toIso8601String(),
-        'field_names': 'Risk fields as in the ACAPS Risk Radar export / API (data/risk-radar-export.csv); '
+        'field_names': 'Risk fields as in the ACAPS Risk Radar API / export; '
             'expert_input is added by Ground Truth.',
         'min_respondents': minPanel,
         'probability_scale': {
@@ -1274,7 +1555,7 @@ class AppState extends ChangeNotifier {
           homeCountry: 'Chad', interests: {'Sudan', 'Cameroon'}, simulated: true, persona: true,
           participation: 0.85, skill: 0.8),
       Expert(id: 'p2', realName: 'Jean-Paul Ndoumbé', pseudonym: 'Kestrel-42', level: Anonymity.pseudonymous,
-          homeCountry: 'Cameroon', interests: {'Chad', 'Central African Republic'}, simulated: true, persona: true,
+          homeCountry: 'Cameroon', interests: {'Chad', 'Central African Republic', 'Sudan'}, simulated: true, persona: true,
           participation: 0.9, skill: 0.5),
       Expert(id: 'p3', realName: null, pseudonym: 'Sirocco-08', level: Anonymity.anonymous,
           homeCountry: 'Chad', interests: {'Sudan', 'Mali'}, simulated: true, persona: true,
@@ -1283,46 +1564,59 @@ class AppState extends ChangeNotifier {
       Expert(id: 'e4', realName: 'Fatimé Abakar', pseudonym: 'Baobab-23', level: Anonymity.knownToAcaps,
           homeCountry: 'Chad', interests: {'Sudan'}, simulated: true, participation: 0.9, skill: 0.9),
       Expert(id: 'e5', realName: 'Moussa Idriss', pseudonym: 'Lantern-61', level: Anonymity.pseudonymous,
-          homeCountry: 'Chad', simulated: true, participation: 0.8, skill: 0.4),
+          homeCountry: 'Chad', interests: {'Sudan'}, simulated: true, participation: 0.8, skill: 0.4),
       Expert(id: 'e6', realName: null, pseudonym: 'Delta-30', level: Anonymity.anonymous,
           homeCountry: 'Sudan', interests: {'Chad'}, simulated: true, participation: 0.75, skill: 0.6),
       Expert(id: 'e7', realName: 'Halima Osman', pseudonym: 'Nomad-55', level: Anonymity.pseudonymous,
           homeCountry: 'Sudan', interests: {'Chad', 'South Sudan'}, simulated: true, participation: 0.85, skill: 0.7),
       Expert(id: 'e8', realName: 'Mahamat Saleh', pseudonym: 'Meridian-12', level: Anonymity.knownToAcaps,
-          homeCountry: 'Chad', interests: {'Niger'}, simulated: true, onRating: false, participation: 0.7, skill: 0.2),
+          homeCountry: 'Chad', interests: {'Niger', 'Sudan'}, simulated: true, onRating: false, participation: 0.7, skill: 0.2),
       // Other panels.
       Expert(id: 'e9', realName: 'Omar Bashir', pseudonym: 'Atlas-77', level: Anonymity.pseudonymous,
           homeCountry: 'Sudan', interests: {'South Sudan'}, simulated: true, participation: 0.8, skill: 0.55),
       Expert(id: 'e10', realName: null, pseudonym: 'Monsoon-04', level: Anonymity.anonymous,
-          homeCountry: 'South Sudan', simulated: true, participation: 0.7, skill: 0.45),
+          homeCountry: 'South Sudan', simulated: true, participation: 0.7, skill: 0.45,
+          joinedVia: JoinedVia.expertReferral),
       Expert(id: 'e11', realName: 'Wanjiru Kamau', pseudonym: 'Compass-19', level: Anonymity.knownToAcaps,
           homeCountry: 'Kenya', interests: {'Sudan', 'Ethiopia'}, simulated: true, participation: 0.9, skill: 0.75),
       Expert(id: 'e12', realName: 'Aïssata Traoré', pseudonym: 'Cedar-66', level: Anonymity.pseudonymous,
-          homeCountry: 'Mali', interests: {'Niger'}, simulated: true, participation: 0.8, skill: 0.6),
+          homeCountry: 'Mali', interests: {'Niger'}, simulated: true, participation: 0.8, skill: 0.6,
+          joinedVia: JoinedVia.expertReferral),
       // Joined on 4 Nov through Harmattan-17's referral link; no answers yet.
       Expert(id: 'e13', realName: null, pseudonym: 'Rift-07', level: Anonymity.anonymous,
-          homeCountry: 'Kenya', simulated: true, participation: 0, skill: 0.5),
+          homeCountry: 'Kenya', simulated: true, participation: 0, skill: 0.5,
+          joinedVia: JoinedVia.expertReferral),
     ];
     _responses.clear();
     _skipped.clear();
     _seedInvites();
     _ensureReferralCodes(Random(7));
-    // Demo: two colleagues joined through Amina's (Harmattan-17) link: one
-    // has answered many risks, one has only just joined.
-    referrals = [Referral('p1', DateTime(2026, 10, 20), 'e12'), Referral('p1', DateTime(2026, 11, 4), 'e13')];
-    final t1 = 'R1043 - T0618', t2 = 'R1043 - T0619', t3 = 'R1043 - T0620';
+    // Demo: three colleagues joined through Amina's (Harmattan-17) link, so
+    // she is a Referral Master: two have answered many risks, one has only
+    // just joined.
+    referrals = [
+      Referral('p1', DateTime(2026, 10, 20), 'e12'),
+      Referral('p1', DateTime(2026, 10, 28), 'e10'),
+      Referral('p1', DateTime(2026, 11, 4), 'e13'),
+    ];
+    // The demo risk's triggers, by position (ids come from the Risk Radar).
+    // R1055: aid cuts in eastern Chad / relocation from border areas /
+    // returns through West Darfur entry points.
+    final demoItems = byId(demoRiskId)?.surveyItems ?? const <SurveyItem>[];
+    String item(int i) => demoItems.isEmpty ? 'risk' : demoItems[i.clamp(0, demoItems.length - 1)].id;
+    final t1 = item(0), t2 = item(1), t3 = item(2);
     comments = [
-      Comment(id: 's1', riskId: 'R1043', itemId: t1, authorId: 'e6',
-          text: 'Smuggling routes are shifting north. Watch Bahaï and Tiné, not only Adré.',
+      Comment(id: 's1', riskId: demoRiskId, itemId: t1, authorId: 'e6',
+          text: 'WFP ration cuts in Ouré Cassoni already pushed families to send one member back to check on land. Watch the next ration cycle.',
           agreeIds: {'e4', 'e5', 'e8'}),
-      Comment(id: 's2', riskId: 'R1043', itemId: t1, authorId: 'e4',
-          text: 'The rainy season (Jul-Sep) usually slows cross-border movement. Expect a dip before escalation picks up again.',
+      Comment(id: 's2', riskId: demoRiskId, itemId: t1, authorId: 'e4',
+          text: 'The rainy season (Jul-Sep) usually slows movement across the border. Expect a dip in returns before they pick up again.',
           agreeIds: {'e6', 'e7'}, disagreeIds: {'e5', 'e8'}),
-      Comment(id: 's3', riskId: 'R1043', itemId: t2, authorId: 'e7',
-          text: 'Threats against Amdjarass are mostly rhetoric so far. Attacks on fuel convoys on the Abéché road are the more likely strike.',
+      Comment(id: 's3', riskId: demoRiskId, itemId: t2, authorId: 'e7',
+          text: 'Relocation from Adré is mostly announced, not done yet. Fear of the army deployment is the stronger push for now.',
           agreeIds: {'e4', 'e5', 'e6', 'e8'}, useful: true, usefulBy: 'm2', reviewed: true, reviewedBy: 'm2'),
-      Comment(id: 's4', riskId: 'R1043', itemId: t3, authorId: 'e5',
-          text: 'Recruitment in the Ouaddaï camps is an earlier signal of proxy mobilisation than armed incursions.',
+      Comment(id: 's4', riskId: demoRiskId, itemId: t3, authorId: 'e5',
+          text: 'Pendular movement through Adré is easy to count as return. Many go back to Chad after the harvest.',
           agreeIds: {'e4', 'e6', 'e7'}, disagreeIds: {'e8'}, usedInRiskId: 'R1048', usedBy: 'm1', reviewed: true, reviewedBy: 'm1'),
       // A few more, so the moderator filters have something to show.
       Comment(id: 's6', riskId: 'R1048', itemId: byId('R1048')?.surveyItems.first.id ?? 'risk', authorId: 'e9',
@@ -1334,13 +1628,13 @@ class AppState extends ChangeNotifier {
       Comment(id: 's8', riskId: 'R1037', itemId: byId('R1037')?.surveyItems.first.id ?? 'risk', authorId: 'e10',
           text: 'Flooding in Jonglei will cut road access before the fighting does.',
           agreeIds: {'e9'}, disagreeIds: {'e7'}),
-      Comment(id: 's9', riskId: 'R1043', itemId: 'R1043 - T0620', authorId: 'e8',
-          text: 'I see little sign of proxy mobilisation yet; this trigger looks overrated.',
+      Comment(id: 's9', riskId: demoRiskId, itemId: t3, authorId: 'e8',
+          text: 'I see few households settling in El Geneina yet; this trigger looks overrated.',
           agreeIds: {}, disagreeIds: {'e4', 'e5', 'e6'}, reviewed: true, reviewedBy: 'm3'),
       // Persona history: shows moderator feedback under the My forecasts tab.
       Comment(id: 's5', riskId: 'R0002', itemId: byId('R0002')?.surveyItems.first.id ?? 'risk', authorId: 'p1',
           text: 'Fighting is pushing traders off the El Geneina - Adre route; watch fuel prices in Adre market.',
-          agreeIds: {'e4', 'e6', 'e7', 'e9'}, disagreeIds: {'e11'}, useful: true, usefulBy: 'm1', usedInRiskId: 'R1043', usedBy: 'm1',
+          agreeIds: {'e4', 'e6', 'e7', 'e9'}, disagreeIds: {'e11'}, useful: true, usefulBy: 'm1', usedInRiskId: demoRiskId, usedBy: 'm1',
           reviewed: true, reviewedBy: 'm1'),
     ];
   }
@@ -1349,7 +1643,9 @@ class AppState extends ChangeNotifier {
   // Persistence
   // =========================================================================
 
-  static const _prefsKey = 'ground_truth_db_v4';
+  // Its own key: older phone builds saved "practice" answers on closed risks,
+  // which this version must not score.
+  static const _prefsKey = 'ground_truth_mobile_db_v5';
 
   void _changed() {
     _statsCache.clear();
@@ -1364,15 +1660,15 @@ class AppState extends ChangeNotifier {
         'experts': [for (final e in experts) e.toJson()],
         'responses': [for (final r in _responses.values) r.toJson()],
         'comments': [for (final c in comments) c.toJson()],
-        'custom_risks': [for (final r in risks.where((r) => r.custom)) r.toJson()],
         'skipped': {for (final e in _skipped.entries) e.key: e.value.toList()},
         'invite': invitePanel,
         'invite_code': pendingInviteCode,
-        'last_invite': lastOpenedInvite,
         'invites': [for (final i in invites) i.toJson()],
         'referrals': [for (final r in referrals) r.toJson()],
         'session': sessionExpertId,
         'moderator': sessionModeratorId,
+        'account': sessionAccountId,
+        if (accountModerators[sessionModeratorId] case final m?) 'account_moderator_name': m.name,
       }),
     );
   }
@@ -1386,8 +1682,8 @@ class AppState extends ChangeNotifier {
       _responses.clear();
       for (final r in m['responses'] as List) {
         final resp = Response.fromJson((r as Map).cast<String, dynamic>());
-        // Old "practice" answers on closed risks: no longer allowed, never scored.
-        if (byId(resp.riskId)?.isResolved ?? false) continue;
+        // Kept even when the risk has closed since: answers can only be given
+        // while a risk is active, so these are the forecasts that get scored.
         _responses['${resp.expertId}|${resp.riskId}'] = resp;
       }
       comments = [for (final c in m['comments'] as List) Comment.fromJson((c as Map).cast<String, dynamic>())];
@@ -1399,20 +1695,21 @@ class AppState extends ChangeNotifier {
         });
       invitePanel = m['invite'] as String?;
       pendingInviteCode = m['invite_code'] as String?;
-      lastOpenedInvite = m['last_invite'] as String?;
       if (m['invites'] is List) {
         invites = [for (final i in m['invites'] as List) Invite.fromJson((i as Map).cast<String, dynamic>())];
       } else {
         _seedInvites(); // saved before single-use invites existed
       }
       referrals = [for (final r in (m['referrals'] as List? ?? const [])) Referral.fromJson((r as Map).cast<String, dynamic>())];
-      if (_ensureReferralCodes()) _save(); // saved before referral links existed: fix them now
+      if (_ensureReferralCodes()) _save(); // saved before referral codes existed: fix them now
       sessionExpertId = m['session'] as String?;
+      sessionAccountId = m['account'] as String?;
       final mod = m['moderator'];
+      // A real moderator account: its name, so the session can be restored.
+      if (sessionAccountId != null && mod == sessionAccountId && m['account_moderator_name'] is String) {
+        accountModerators[sessionAccountId!] = Moderator(id: sessionAccountId!, name: m['account_moderator_name'] as String);
+      }
       sessionModeratorId = mod == true ? moderators.first.id : moderatorById(mod is String ? mod : null)?.id;
-      risks
-        ..removeWhere((r) => r.custom)
-        ..addAll([for (final r in (m['custom_risks'] as List? ?? const [])) Risk.fromJson((r as Map).cast<String, dynamic>())]);
       return true;
     } catch (_) {
       return false; // corrupt or old state: start fresh

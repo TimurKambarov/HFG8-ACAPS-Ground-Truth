@@ -30,6 +30,30 @@ int? parseLevel5(String s) {
   return null;
 }
 
+/// ACAPS risk categories, exactly as in the ACAPS Risk Radar (API and the
+/// ACAPS website). Each risk carries ACAPS's own values; none are invented.
+const riskTypes = [
+  'New emerging risk',
+  'Marked deterioration in an existing crisis',
+  'Future impact of a hazard which has already taken place',
+];
+
+const priorityNeeds = [
+  'Food security',
+  'Protection',
+  'Livelihoods',
+  'Health',
+  'WASH',
+  'Displacement',
+  'Humanitarian access',
+  'Shelter',
+  'Education',
+  'Nutrition',
+];
+
+/// Expected exposure bands (people who may need additional assistance), smallest first.
+const exposureBands = ['<20,000', '20,000-100,000', '100,000-250,000', '250,000-500,000', '>500,000'];
+
 /// "[ACLED 08/04/2026](https://...)" -> "ACLED 08/04/2026"
 String stripMarkdownLinks(String s) => s
     .replaceAllMapped(RegExp(r'\[([^\]]+)\]\([^)]*\)'), (m) => m[1]!)
@@ -85,7 +109,7 @@ class Risk {
   final String type;
   final String country;
 
-  /// ISO 3166-1 alpha-3 code(s), as in the Risk Radar export (e.g. "TCD").
+  /// ISO 3166-1 alpha-3 code(s), as in the ACAPS Risk Radar (e.g. "TCD").
   final String iso;
   final String rationale;
   final int? probabilityIdx;
@@ -98,11 +122,7 @@ class Risk {
   final String materialisation;
   final List<Trigger> triggers;
 
-  /// Created by an ACAPS moderator in the app (not from the Risk Radar export).
-  final bool custom;
-
   const Risk({
-    this.custom = false,
     required this.id,
     required this.title,
     required this.type,
@@ -120,30 +140,51 @@ class Risk {
     required this.triggers,
   });
 
-  factory Risk.fromRow(Map<String, String> m) {
-    String f(String k) => (m[k] ?? '').trim();
-    final mat = [f('Hazard materialisation'), f('Impact materialisation description')]
+  /// One row of the Supabase `risks` table. scripts/sync_risks.dart fills it
+  /// from the ACAPS Risk Radar API (risk-radar/risk-radar/), so these are
+  /// ACAPS's live risks, not the CSV export in data/.
+  ///
+  /// Mapping, table column -> our field:
+  ///   risk_id / title / risk_type / iso / country -> id / title / type / iso / country
+  ///   probability "High"          -> probabilityIdx 3 (0 = Very low ... 4 = Very high)
+  ///   impact 4                    -> impact 4
+  ///   risk_level / risk_trend / status / expected_exposure -> level / trend / status / exposure
+  ///   expected_priority_needs [..] -> needs "Food security, Protection"
+  ///   hazard_materialisation + impact_materialisation_description -> materialisation
+  ///   triggers_raw                -> triggers (the API's "Trigger ID: / Title:" text)
+  factory Risk.fromDb(Map<String, dynamic> m) {
+    // Reads a column as clean text: null -> "", lists -> "a, b", trimmed.
+    String f(String k) {
+      final v = m[k];
+      if (v == null) return '';
+      if (v is List) return v.map((x) => '$x'.trim()).where((x) => x.isNotEmpty).join(', ');
+      return '$v'.trim();
+    }
+
+    // "What happened": hazard and impact, as two paragraphs.
+    final mat = [f('hazard_materialisation'), f('impact_materialisation_description')]
         .where((s) => s.isNotEmpty)
         .join('\n\n');
     return Risk(
-      id: f('Risk ID'),
-      title: f('Risk Title'),
-      type: f('Risk Type'),
-      country: f('Country'),
-      iso: f('ISO'),
-      rationale: stripMarkdownLinks(f('Rationale')),
-      probabilityIdx: parseLevel5(f('Probability')),
-      impact: int.tryParse(f('Impact')),
-      level: f('Risk Level'),
-      trend: f('Risk trend'),
-      status: f('Status'),
-      exposure: f('Expected exposure'),
-      needs: f('Expected priority needs'),
+      id: f('risk_id'),
+      title: f('title'),
+      type: f('risk_type'),
+      country: f('country'),
+      iso: f('iso'),
+      rationale: stripMarkdownLinks(f('rationale')),
+      probabilityIdx: parseLevel5(f('probability')),
+      impact: int.tryParse(f('impact')),
+      level: f('risk_level'),
+      trend: f('risk_trend'),
+      status: f('status'),
+      exposure: f('expected_exposure'),
+      needs: f('expected_priority_needs'),
       materialisation: stripMarkdownLinks(mat),
-      triggers: parseTriggers(m['Triggers'] ?? ''),
+      triggers: parseTriggers(f('triggers_raw')),
     );
   }
 
+  /// For the on-device copy of the last risks loaded (offline use).
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
@@ -160,12 +201,11 @@ class Risk {
         'needs': needs,
         'materialisation': materialisation,
         'triggers': [
-          for (final t in triggers) {'id': t.id, 'title': t.title, 'description': t.description},
+          for (final t in triggers) {'id': t.id, 'title': t.title, 'description': t.description, 'completion': t.completion},
         ],
       };
 
   factory Risk.fromJson(Map<String, dynamic> m) => Risk(
-        custom: true,
         id: m['id'] as String,
         title: m['title'] as String,
         type: (m['type'] as String?) ?? '',
@@ -176,13 +216,18 @@ class Risk {
         impact: (m['impact'] as num?)?.toInt(),
         level: (m['level'] as String?) ?? '',
         trend: (m['trend'] as String?) ?? '',
-        status: (m['status'] as String?) ?? 'Active',
+        status: (m['status'] as String?) ?? '',
         exposure: (m['exposure'] as String?) ?? '',
         needs: (m['needs'] as String?) ?? '',
         materialisation: (m['materialisation'] as String?) ?? '',
         triggers: [
           for (final t in (m['triggers'] as List? ?? const []))
-            Trigger(id: t['id'] as String, title: t['title'] as String, description: (t['description'] as String?) ?? ''),
+            Trigger(
+              id: t['id'] as String,
+              title: t['title'] as String,
+              description: (t['description'] as String?) ?? '',
+              completion: (t['completion'] as num?)?.toInt(),
+            ),
         ],
       );
 
@@ -194,18 +239,36 @@ class Risk {
   /// Imported from ACAPS's earlier risk list (IDs below R1000). The brief
   /// warns these "resolve over much longer periods than recent ones", so
   /// their scores are not true 6-month forecasts: labelled as indicative.
-  bool get fromEarlierList => !custom && (int.tryParse(id.replaceAll(RegExp('[^0-9]'), '')) ?? 1000) < 1000;
+  bool get fromEarlierList => (int.tryParse(id.replaceAll(RegExp('[^0-9]'), '')) ?? 1000) < 1000;
 
   bool inCountry(String c) =>
       country.split(',').map((s) => s.trim()).contains(c);
 
-  String get shortType {
+  String get shortType => shortTypeOf(type);
+
+  /// Short label for a risk type, for chips: "New risk", "Deterioration", "Hazard impact".
+  static String shortTypeOf(String type) {
     final t = type.toLowerCase();
     if (t.startsWith('new')) return 'New risk';
     if (t.startsWith('marked')) return 'Deterioration';
     if (t.startsWith('future')) return 'Hazard impact';
     return type.isEmpty ? 'Risk' : type;
   }
+
+  /// Expected priority needs as separate categories, in ACAPS's order.
+  List<String> get needList {
+    final given = needs.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toSet();
+    return [...priorityNeeds.where(given.contains), ...given.where((s) => !priorityNeeds.contains(s))];
+  }
+
+  /// Position of the expected exposure in [exposureBands], or null if unknown.
+  int? get exposureIdx {
+    final i = exposureBands.indexOf(exposure.trim());
+    return i < 0 ? null : i;
+  }
+
+  /// Everything a search should match: ID, title, countries and categories.
+  String get searchText => '$id $title $country $type $needs $exposure'.toLowerCase();
 
   /// First paragraph of the rationale, trimmed for a card.
   String get summary {
@@ -214,9 +277,14 @@ class Risk {
   }
 }
 
+/// The demo risk: the survey shown first, with a fixed storyline (see
+/// AppState._demoStories). It must be an active risk in the ACAPS Risk Radar
+/// API; R1055 is about refugees returning from eastern Chad to West Darfur.
+const demoRiskId = 'R1055';
+
 /// Hand-written one-line summaries for demo risks; others fall back to the title.
 const _oneLiners = {
-  'R1043': 'The war in Sudan may spill across the border into eastern Chad.',
+  demoRiskId: 'People returning from eastern Chad may deepen needs in West Darfur.',
 };
 
 extension RiskSurvey on Risk {
@@ -355,7 +423,7 @@ extension CreditText on Credit {
       };
 }
 
-/// A single-use invite link: one per person, works once. Trust is checked
+/// A single-use invite code: one per person, works once. Trust is checked
 /// at the door (ACAPS knows whom it invited); inside, the expert chooses
 /// their anonymity. So an invite records THAT it was used, never by which
 /// account: otherwise a fully anonymous expert could be traced through it.
@@ -368,6 +436,9 @@ class Invite {
 
   /// Moderator who created it.
   final String createdBy;
+
+  /// Their name, for codes listed from the server (real moderator accounts).
+  final String? createdByName;
   final DateTime createdAt;
 
   /// Who it is for, so moderators can follow up. Moderators only.
@@ -379,6 +450,7 @@ class Invite {
     required this.code,
     this.country,
     required this.createdBy,
+    this.createdByName,
     required this.createdAt,
     this.note = '',
     this.usedAt,
@@ -409,10 +481,10 @@ class Invite {
       );
 }
 
-/// Result of opening an invite link.
-enum InviteStatus { ok, unknown, used, revoked }
+/// Result of checking a typed invite or referral code.
+enum InviteStatus { ok, unknown, used, revoked, expired }
 
-/// Someone joined through an expert's referral link. The joined account is
+/// Someone joined with an expert's referral code. The joined account is
 /// kept so the inviter can follow the colleague's progress (how many risks
 /// answered) and, in the pilot, earn points after 3 answered risks. The
 /// inviter only ever sees the stage: never the name, pseudonym, answers or
